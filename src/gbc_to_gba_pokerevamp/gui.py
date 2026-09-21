@@ -281,6 +281,9 @@ class RevampApp(tk.Tk):
         self.bind_all("<Shift-MouseWheel>", lambda e: self.preview.xview_scroll(int(-e.delta / 120), "units"))
         self.bind_all("<Control-z>", lambda e: self.undo())
         self.bind_all("<Control-Z>", lambda e: self.undo())
+        # Tool shortcuts (only when not typing in an entry).
+        for key, tool in (("i", "pick"), ("b", "pencil"), ("g", "fill"), ("e", "erase"), ("x", "erase_fill")):
+            self.bind_all(f"<KeyPress-{key}>", lambda ev, t=tool: None if isinstance(ev.widget, (ttk.Entry, tk.Entry, tk.Text)) else self.set_tool(t))
 
         # Sprite
         f = ttk.LabelFrame(left, text="Sprite", padding=6)
@@ -318,27 +321,10 @@ class RevampApp(tk.Tk):
         self.ref_label = ttk.Label(f, text="", style="Muted.TLabel")
         self.ref_label.pack(anchor="w")
 
-        # Paint
-        f = ttk.LabelFrame(left, text="Paint  (works on the Source and the Result panels)", padding=6)
+        # Paint palettes (the tools themselves live in the toolbar above the preview)
+        f = ttk.LabelFrame(left, text="Brush colors", padding=6)
         f.pack(fill="x", pady=(0, 6))
-        tools = ttk.Frame(f)
-        tools.pack(fill="x")
-        self.tool_buttons: dict[str, ttk.Button] = {}
-        for text, val in (("Pick color", "pick"), ("Pencil", "pencil"), ("Fill region", "fill")):
-            b = ttk.Button(tools, text=text, style="Tool.TButton", command=lambda v=val: self.set_tool(v))
-            b.pack(side="left", padx=(0, 3))
-            self.tool_buttons[val] = b
-        ttk.Button(tools, text="Undo", style="Tool.TButton", command=self.undo).pack(side="left", padx=(8, 0))
-        brow = ttk.Frame(f)
-        brow.pack(fill="x", pady=(4, 0))
-        ttk.Label(brow, text="Brush:").pack(side="left")
-        self.brush_swatch = self._reg(tk.Canvas(brow, width=26, height=20, highlightthickness=1), "swatch")
-        self.brush_swatch.pack(side="left", padx=4)
-        self.brush_label = ttk.Label(brow, text="0,0,0", style="Muted.TLabel")
-        self.brush_label.pack(side="left")
-        ttk.Button(brow, text="Transparent", style="Tool.TButton", command=lambda: self.set_brush(None)).pack(side="right")
-        ttk.Button(brow, text="Custom…", style="Tool.TButton", command=self.custom_brush).pack(side="right", padx=3)
-        ttk.Label(f, text="Reference colors (one row per region, dark → light):", style="Muted.TLabel").pack(anchor="w", pady=(6, 0))
+        ttk.Label(f, text="Reference colors (one row per region, dark → light):", style="Muted.TLabel").pack(anchor="w")
         self.palette_frame = ttk.Frame(f)
         self.palette_frame.pack(fill="x")
         ttk.Label(f, text="Source colors:", style="Muted.TLabel").pack(anchor="w", pady=(4, 0))
@@ -350,7 +336,7 @@ class RevampApp(tk.Tk):
         self.edit_label.pack(side="left")
         ttk.Button(erow, text="Clear result edits", style="Tool.TButton", command=lambda: self.clear_edits("result")).pack(side="right")
         ttk.Button(erow, text="Clear source edits", style="Tool.TButton", command=lambda: self.clear_edits("source")).pack(side="right", padx=3)
-        ttk.Label(f, text="Right-click a painted pixel to erase that edit. Pixels you paint on the Source are kept exactly as painted.", style="Muted.TLabel", wraplength=340).pack(anchor="w", pady=(4, 0))
+        ttk.Label(f, text="Paint on the Source or the Result panel. Pixels you paint on the Source are kept exactly as painted. Right-click a painted pixel to undo just that edit. Keys: I pick, B pencil, G fill, E eraser, X erase region, Ctrl+Z undo.", style="Muted.TLabel", wraplength=340).pack(anchor="w", pady=(4, 0))
 
         # Color map
         f = ttk.LabelFrame(left, text="Color mapping  (whole source color → target)", padding=6)
@@ -388,13 +374,30 @@ class RevampApp(tk.Tk):
         ttk.Button(f, text="Save session…", command=self.save_preset).pack(side="left", padx=4)
         ttk.Button(f, text="Load session…", command=self.load_preset).pack(side="left")
 
-        # Right: preview
+        # Right: toolbar (tools + brush), view bar, preview
         right = ttk.Frame(root)
         right.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
-        right.rowconfigure(1, weight=1)
+        right.rowconfigure(2, weight=1)
         right.columnconfigure(0, weight=1)
+        tools = ttk.Frame(right)
+        tools.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 4))
+        self.tool_buttons: dict[str, ttk.Button] = {}
+        for text, val in (("Pick (I)", "pick"), ("Pencil (B)", "pencil"), ("Fill region (G)", "fill"), ("Eraser (E)", "erase"), ("Erase region (X)", "erase_fill")):
+            b = ttk.Button(tools, text=text, style="Tool.TButton", command=lambda v=val: self.set_tool(v))
+            b.pack(side="left", padx=(0, 3))
+            self.tool_buttons[val] = b
+        ttk.Button(tools, text="Undo (Ctrl+Z)", style="Tool.TButton", command=self.undo).pack(side="left", padx=(10, 0))
+        ttk.Separator(tools, orient="vertical").pack(side="left", fill="y", padx=10)
+        ttk.Label(tools, text="Brush").pack(side="left")
+        self.brush_swatch = self._reg(tk.Canvas(tools, width=26, height=20, highlightthickness=1), "swatch")
+        self.brush_swatch.pack(side="left", padx=4)
+        self.brush_label = ttk.Label(tools, text="0,0,0", style="Muted.TLabel", width=12)
+        self.brush_label.pack(side="left")
+        ttk.Button(tools, text="Custom…", style="Tool.TButton", command=self.custom_brush).pack(side="left", padx=3)
+        ttk.Button(tools, text="Transparent", style="Tool.TButton", command=lambda: self.set_brush(None)).pack(side="left")
+
         bar = ttk.Frame(right)
-        bar.grid(row=0, column=0, sticky="ew")
+        bar.grid(row=1, column=0, columnspan=2, sticky="ew")
         ttk.Label(bar, text="Zoom").pack(side="left")
         ttk.Spinbox(bar, from_=2, to=14, textvariable=self.zoom, width=4, command=lambda: (self.fit_zoom.set(False), self.redraw())).pack(side="left", padx=(2, 4))
         ttk.Checkbutton(bar, text="fit", variable=self.fit_zoom, command=self.redraw).pack(side="left", padx=(0, 10))
@@ -408,11 +411,11 @@ class RevampApp(tk.Tk):
         self.status = ttk.Label(bar, text="", style="Muted.TLabel")
         self.status.pack(side="right")
         self.preview = self._reg(tk.Canvas(right, highlightthickness=0), "canvas")
-        self.preview.grid(row=1, column=0, sticky="nsew")
+        self.preview.grid(row=2, column=0, sticky="nsew")
         pv_y = ttk.Scrollbar(right, orient="vertical", command=self.preview.yview)
-        pv_y.grid(row=1, column=1, sticky="ns")
+        pv_y.grid(row=2, column=1, sticky="ns")
         pv_x = ttk.Scrollbar(right, orient="horizontal", command=self.preview.xview)
-        pv_x.grid(row=2, column=0, sticky="ew")
+        pv_x.grid(row=3, column=0, sticky="ew")
         self.preview.configure(yscrollcommand=pv_y.set, xscrollcommand=pv_x.set)
         self.preview.bind("<Button-1>", self._on_press)
         self.preview.bind("<B1-Motion>", self._on_drag)
@@ -421,9 +424,9 @@ class RevampApp(tk.Tk):
         self.preview.bind("<Motion>", self._on_motion)
         self.preview.bind("<Configure>", lambda e: self.redraw())
         self.hover = ttk.Label(right, text="", style="Muted.TLabel")
-        self.hover.grid(row=3, column=0, sticky="w")
+        self.hover.grid(row=4, column=0, sticky="w")
         self.log = self._reg(tk.Text(right, height=5, wrap="word", state="disabled", font=("Consolas", 9), relief="flat"), "text")
-        self.log.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        self.log.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(4, 0))
 
         self.set_tool("pencil")
         self._refresh_ref_list()
@@ -767,21 +770,22 @@ class RevampApp(tk.Tk):
                 if which == "source":
                     self._highlight_color(_key(self.brush))  # type: ignore[arg-type]
             return
-        if tool == "pencil":
+        if tool in ("pencil", "erase"):
             self._group = None
-            self._paint(which, [(px, py)])
-        elif tool == "fill":
+            self._paint(which, [(px, py)], erase=(tool == "erase"))
+        elif tool in ("fill", "erase_fill"):
             arr = self._panel_array(which)
             if arr is None:
                 return
             region = flood_region(arr, px, py)
             ys, xs = np.nonzero(region)
             self._group = None
-            self._paint(which, list(zip(xs.tolist(), ys.tolist())))
+            self._paint(which, list(zip(xs.tolist(), ys.tolist())), erase=(tool == "erase_fill"))
             self._group = None
 
     def _on_drag(self, event: tk.Event) -> None:
-        if self.tool.get() != "pencil":
+        tool = self.tool.get()
+        if tool not in ("pencil", "erase"):
             return
         hit = self._hit(event.x, event.y)
         if hit is None:
@@ -792,7 +796,7 @@ class RevampApp(tk.Tk):
         if (which, px, py) in self._drag_painted:
             return
         self._drag_painted.add((which, px, py))
-        self._paint(which, [(px, py)])
+        self._paint(which, [(px, py)], erase=(tool == "erase"))
 
     def _record(self, which: str, pos: tuple[int, int], old: RGB | None, had: bool) -> None:
         if self._group is None:
@@ -817,17 +821,15 @@ class RevampApp(tk.Tk):
             self._group = None
             self._after_edit(which)
 
-    def _paint(self, which: str, pixels: list[tuple[int, int]]) -> None:
+    def _paint(self, which: str, pixels: list[tuple[int, int]], erase: bool = False) -> None:
         if self.outcome is None:
             return
         edits = self.source_edits if which == "source" else self.result_edits
-        color = None if self.brush_is_transparent else self.brush
+        color = None if (erase or self.brush_is_transparent) else self.brush
         arr = self._panel_array(which)
         for x, y in pixels:
-            if which == "source" and arr is not None:
-                # Painting the background transparent on the source is a no-op.
-                if color is None and not arr[y, x, 3]:
-                    continue
+            if arr is not None and color is None and not arr[y, x, 3]:
+                continue  # erasing an already-transparent pixel is a no-op
             had = (x, y) in edits
             self._record(which, (x, y), edits.get((x, y)), had)
             edits[(x, y)] = color
@@ -873,7 +875,7 @@ class RevampApp(tk.Tk):
         self.tool.set(name)
         for val, b in self.tool_buttons.items():
             b.configure(style="Selected.TButton" if val == name else "Tool.TButton")
-        self.preview.configure(cursor={"pick": "target", "pencil": "pencil", "fill": "spraycan"}.get(name, ""))
+        self.preview.configure(cursor={"pick": "target", "pencil": "pencil", "fill": "spraycan", "erase": "X_cursor", "erase_fill": "X_cursor"}.get(name, ""))
 
     def set_brush(self, rgb: RGB | None) -> None:
         self.brush_is_transparent = rgb is None
