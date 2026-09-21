@@ -1,0 +1,108 @@
+{
+  "repositories": {
+    "pokered": {
+      "url": "https://github.com/pret/pokered.git",
+      "game_family": "rb",
+      "generation": 1,
+      "pokemon_globs": ["gfx/pokemon/front/*.png"],
+      "trainer_globs": ["gfx/trainers/*.png"],
+      "gen1_palettes": {"map": "data/pokemon/palettes.asm", "table": "data/sgb/sgb_palettes.asm"},
+      "trainer_palette": "PAL_MEWMON"
+    },
+    "pokeyellow": {
+      "url": "https://github.com/pret/pokeyellow.git",
+      "game_family": "yellow",
+      "generation": 1,
+      "pokemon_globs": ["gfx/pokemon/front/*.png"],
+      "trainer_globs": ["gfx/trainers/*.png"],
+      "gen1_palettes": {"map": "data/pokemon/palettes.asm", "table": "data/sgb/sgb_palettes.asm"},
+      "trainer_palette": "PAL_MEWMON"
+    },
+    "pokegold_gold": {
+      "url": "https://github.com/pret/pokegold.git",
+      "dir": "pokegold",
+      "game_family": "gold",
+      "generation": 2,
+      "pokemon_globs": ["gfx/pokemon/*/front_gold.png"],
+      "trainer_globs": ["gfx/trainers/*.png"]
+    },
+    "pokegold_silver": {
+      "url": "https://github.com/pret/pokegold.git",
+      "dir": "pokegold",
+      "game_family": "silver",
+      "generation": 2,
+      "pokemon_globs": ["gfx/pokemon/*/front_silver.png"],
+      "trainer_globs": []
+    },
+    "pokecrystal": {
+      "url": "https://github.com/pret/pokecrystal.git",
+      "game_family": "crystal",
+      "generation": 2,
+      "pokemon_globs": ["gfx/pokemon/*/front.png"],
+      "trainer_globs": ["gfx/trainers/*.png"]
+    },
+    "pokefirered": {
+      "url": "https://github.com/pret/pokefirered.git",
+      "game_family": "frlg",
+      "generation": 3,
+      "pokemon_globs": ["graphics/pokemon/**/front.png"],
+      "trainer_globs": ["graphics/trainers/front_pics/*.png"]
+    },
+    "pokeemerald": {
+      "url": "https://github.com/pret/pokeemerald.git",
+      "game_family": "emerald",
+      "generation": 3,
+      "pokemon_globs": ["graphics/pokemon/**/front.png"],
+      "trainer_globs": ["graphics/trainers/front_pics/*.png"]
+    }
+  },
+  "exclude_name_parts": [
+    "egg", "question_mark", "circled_question_mark", "substitute", "icon", "footprint",
+    "overworld", "shadow", "mask", "anim", "back", "menu", "unused", "fossil", "ghost"
+  ],
+  "name_aliases": {
+    "farfetchd": "farfetch_d",
+    "mrmime": "mr_mime",
+    "mr__mime": "mr_mime",
+    "nidoranf": "nidoran_f",
+    "nidoranm": "nidoran_m",
+    "nidoran_female": "nidoran_f",
+    "nidoran_male": "nidoran_m",
+    "hooh": "ho_oh",
+    "castform_normal": "castform",
+    "deoxys_normal": "deoxys",
+    "cool_trainer_m": "cooltrainer_m",
+    "cool_trainer_f": "cooltrainer_f",
+    "ace_trainer_m": "cooltrainer_m",
+    "ace_trainer_f": "cooltrainer_f",
+    "pokemaniac": "pokemaniac",
+    "psychic_m": "psychic",
+    "swimmer_male": "swimmer_m",
+    "swimmer_female": "swimmer_f",
+    "picnicker": "picnicker",
+    "bug_catcher": "bug_catcher",
+    "lt_surge": "lt_surge",
+    "leader_brock": "brock",
+    "leader_misty": "misty",
+    "leader_lt_surge": "lt_surge",
+    "leader_erika": "erika",
+    "leader_koga": "koga",
+    "leader_sabrina": "sabrina",
+    "leader_blaine": "blaine",
+    "leader_giovanni": "giovanni",
+    "elite_four_lorelei": "lorelei",
+    "elite_four_bruno": "bruno",
+    "elite_four_agatha": "agatha",
+    "elite_four_lance": "lance"
+  },
+  "trainer_strip_suffixes": ["_front_pic", "_front", "_pic"],
+  "trainer_character_names": [
+    "brock", "misty", "lt_surge", "erika", "koga", "sabrina", "blaine", "giovanni",
+    "lorelei", "bruno", "agatha", "lance", "blue", "red", "bill", "oak", "janine"
+  ],
+  "sample_pokemon": [
+    "bulbasaur", "charizard", "pikachu", "squirtle", "gengar", "eevee",
+    "snorlax", "mewtwo", "scyther", "gyarados", "lapras", "ditto"
+  ],
+  "sample_trainers": ["youngster", "lass", "bug_catcher", "hiker", "brock", "misty", "sabrina", "lance"]
+}

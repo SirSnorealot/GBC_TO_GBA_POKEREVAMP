@@ -1,0 +1,6 @@
+Pillow>=10.4
+numpy>=2.0
+scipy>=1.14
+typer>=0.12
+rich>=13.8
+pydantic>=2.8

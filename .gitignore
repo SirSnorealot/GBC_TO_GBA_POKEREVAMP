@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.vscode/settings.json
+vendor/
+data/
+output/*
+!output/.gitkeep
+input/*
+!input/.gitkeep
+*.egg-info/
+build/
+dist/

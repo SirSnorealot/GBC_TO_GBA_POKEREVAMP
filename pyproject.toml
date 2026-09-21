@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gbc-to-gba-pokerevamp"
+version = "0.1.0"
+description = "Deterministic, reference-guided GBC-style to GBA-style Pokemon battle sprite draft converter"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+dependencies = [
+    "Pillow>=10.4",
+    "numpy>=2.0",
+    "scipy>=1.14",
+    "typer>=0.12",
+    "rich>=13.8",
+    "pydantic>=2.8",
+]
+
+[project.scripts]
+gbc_to_gba_pokerevamp = "gbc_to_gba_pokerevamp.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
