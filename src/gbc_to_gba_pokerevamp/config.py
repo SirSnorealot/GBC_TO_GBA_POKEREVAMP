@@ -47,6 +47,15 @@ class RevampConfig(BaseModel):
     report: bool = True
     compare: bool = True  # write a source | revamp | reference sheet next to every result
     seed: int = 0
+    # Effect toggles (the GUI exposes these; all on by default).
+    recolor: bool = True  # same-species positional recolour
+    force_same_subject: bool = False  # treat an explicitly chosen reference as the same Pokémon
+    rebuild_outline: bool = True
+    shade: bool = True
+    enforce_palette: bool = True
+    # Manual colour mapping: source "r,g,b" -> target "r,g,b" (a reference/any colour),
+    # or one of "auto", "keep", "outline", "transparent".
+    color_map: dict[str, str] = Field(default_factory=dict)
 
     @property
     def max_opaque_colors(self) -> int:

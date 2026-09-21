@@ -78,7 +78,7 @@ def resolve_reference_style(
         styles.append(extract_style(ref))
         weights.append(1.0 / (1 + i))  # best-ranked reference dominates
     src_name = canonical_name_from_path(sprite.source_path) if sprite.source_path else ""
-    if src_name and canonical_name_from_path(paths[0]) == src_name:
+    if (src_name and canonical_name_from_path(paths[0]) == src_name) or (explicit and config.force_same_subject):
         # Same species: this reference *is* the answer key for colours; ignore style donors.
         styles[0].same_subject = True
         styles[0].adopt_colors = True
@@ -358,41 +358,142 @@ def heuristic_regions(
     return warnings
 
 
-def run_revamp(
-    input_path: Path,
-    output_root: Path,
+@dataclass
+class RevampOutcome:
+    """Everything a caller (CLI or GUI) needs; no file IO involved."""
+
+    final: np.ndarray
+    stages: dict[str, np.ndarray]  # ordered debug stages, name -> RGBA
+    sprite: SpriteImage
+    infos: list[ColorInfo]
+    style: ReferenceStyle
+    used_refs: list[Path]
+    families: list[Family]
+    norm: NormalizedSprite
+    report: ConversionReport
+    warnings: list[str]
+
+
+def _parse_rgb(text: str) -> RGB | None:
+    parts = text.replace("(", "").replace(")", "").split(",")
+    if len(parts) != 3:
+        return None
+    try:
+        r, g, b = (int(p.strip()) for p in parts)
+    except ValueError:
+        return None
+    return (r, g, b)
+
+
+def apply_color_map(
+    config: RevampConfig,
+    infos: list[ColorInfo],
+    roles: dict[int, ColorRole],
+    norm: NormalizedSprite,
+    families: list[Family],
+    family_map: np.ndarray,
+    level: np.ndarray,
+    style: ReferenceStyle,
+) -> list[str]:
+    """Manual overrides from the GUI: force a source colour onto a chosen target colour.
+
+    The target is looked up in the reference's colour families; when found, the source colour
+    takes that family (so shading uses the official ramp) at the level of the chosen tone.
+    Otherwise the chosen colour becomes the base of a fresh family with synthesised shades.
+    """
+    notes: list[str] = []
+    for src_text, target in config.color_map.items():
+        src_rgb = _parse_rgb(src_text)
+        if src_rgb is None or target in ("", "auto"):
+            continue
+        ci = next((i for i, c in enumerate(infos) if c.rgb == src_rgb), None)
+        if ci is None:
+            continue
+        m = norm.idx == ci
+        if not m.any():
+            continue
+        if target == "outline":
+            family_map[m] = -2
+            notes.append(f"{src_rgb} -> outline")
+            continue
+        if target == "keep":
+            fam = Family(id=len(families), colors=[infos[ci]], base=infos[ci], achromatic=infos[ci].chroma < 12.0)
+            fam.levels[src_rgb] = 0
+            fam.forced_ref = {"levels": {"0": list(src_rgb)}, "base_lch": [infos[ci].L, infos[ci].chroma, infos[ci].hue],
+                              "pixels": 1, "total_pixels": 1, "achromatic": fam.achromatic, "weight": 1.0, "line": None}
+            families.append(fam)
+            family_map[m], level[m] = fam.id, 0
+            notes.append(f"{src_rgb} kept")
+            continue
+        tgt = _parse_rgb(target)
+        if tgt is None:
+            continue
+        ref_family, lvl = None, 0
+        for rf in style.families:
+            for k, v in rf["levels"].items():
+                if tuple(v) == tgt:
+                    ref_family, lvl = rf, int(k)
+        base_info = ColorInfo(rgb=tgt, count=int(m.sum()), frequency=0.0, L=0.0, chroma=0.0, hue=0.0, boundary_fraction=0.0, boundary_share=0.0)
+        from gbc_to_gba_pokerevamp.colorspace import rgb_to_lch
+
+        L, C, h = (float(v) for v in rgb_to_lch(np.array(tgt, dtype=np.uint8)))
+        base_info.L, base_info.chroma, base_info.hue = L, C, h
+        fam = Family(id=len(families), colors=[base_info], base=base_info, achromatic=C < 12.0)
+        fam.levels[tgt] = 0
+        if ref_family is not None:
+            fam.forced_ref = ref_family
+            fam.level_offset = lvl
+        else:
+            fam.forced_ref = {"levels": {"0": list(tgt)}, "base_lch": [L, C, h], "pixels": 1, "total_pixels": 1,
+                              "achromatic": fam.achromatic, "weight": 1.0, "line": None}
+        families.append(fam)
+        family_map[m], level[m] = fam.id, 0
+        notes.append(f"{src_rgb} -> {tgt}")
+    return notes
+
+
+def revamp_sprite(
+    sprite: SpriteImage,
     config: RevampConfig,
     reference_paths: list[Path] | None = None,
-) -> RevampResult:
-    """Convert one sprite. Writes into `<output_root>/<name>/`:
+    input_name: str = "sprite",
+    pinned_pixels: dict[tuple[int, int], RGB] | None = None,
+) -> RevampOutcome:
+    """Pure pipeline: source sprite + config -> final 64x64 RGBA and all intermediate stages.
 
-    revamped.png, compare.png (source | revamp | reference), report.json, debug/ (opt).
+    `pinned_pixels` (source coordinates -> colour) are pixels the user painted by hand: the
+    automatic recolour and shading leave them alone and they end up exactly that colour.
     """
-    warnings: list[str] = []
-    kind = infer_kind(input_path, config)
-    config = config.model_copy(update={"kind": kind})
-    sprite = load_sprite(input_path, kind=kind)  # type: ignore[arg-type]
-    warnings.extend(sprite.warnings)
+    warnings: list[str] = list(sprite.warnings)
+    kind = config.kind if config.kind != "unknown" else "pokemon"
+    stages: dict[str, np.ndarray] = {}
+    stages["01_source_rgba"] = sprite.rgba.copy()
 
-    run_dir = run_dir_for(input_path, output_root)
-    run_dir.mkdir(parents=True, exist_ok=True)
-    output_path = run_dir / "revamped.png"
-    debug_dir: Path | None = None
-    if config.debug:
-        debug_dir = run_dir / "debug"
-        debug_dir.mkdir(parents=True, exist_ok=True)
-        save_rgba_png(sprite.rgba, debug_dir / "01_source_rgba.png")
-        save_rgba_png(mask_to_rgba(sprite.opaque_mask), debug_dir / "02_mask.png")
-
-    # Stage: source colour roles.
+    # Manual "transparent" mappings remove colours from the subject before anything else.
     infos = analyze_colors(sprite.rgba, sprite.opaque_mask)
+    for src_text, target in config.color_map.items():
+        if target != "transparent":
+            continue
+        rgb = _parse_rgb(src_text)
+        if rgb is None:
+            continue
+        drop = sprite.opaque_mask & np.all(sprite.rgba[..., :3] == np.array(rgb, np.uint8), axis=-1)
+        if drop.any():
+            sprite.opaque_mask = sprite.opaque_mask & ~drop
+            if not sprite.opaque_mask.any():
+                raise RevampError("every pixel was mapped to transparent")
+            ys, xs = np.nonzero(sprite.opaque_mask)
+            sprite.bbox = (int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1)
+            warnings.append(f"{int(drop.sum())} pixels of {rgb} made transparent")
+    infos = analyze_colors(sprite.rgba, sprite.opaque_mask)
+    stages["02_mask"] = mask_to_rgba(sprite.opaque_mask)
+
     src_idx, src_palette = index_map(sprite.rgba, sprite.opaque_mask)
     roles = {i: c.role for i, c in enumerate(infos)}
     n_src_colors = len(infos)
 
-    # Stage: Gen 1 sprites (Yellow especially) anti-aliased the *outside* of the outline with
-    # light pixels. Per the revamp rules they are part of the outline: "colour the whole
-    # outline black, including the anti-aliasing" (deleting them would leave a dotted edge).
+    # Gen 1 sprites (Yellow especially) anti-aliased the *outside* of the outline with light
+    # pixels. Per the revamp rules they are part of the outline.
     aa = strip_outer_antialias(src_idx, sprite.opaque_mask, infos)
     if aa.any():
         outline_idx = next((i for i, c in enumerate(infos) if c.role == ColorRole.OUTLINE), None)
@@ -409,66 +510,50 @@ def run_revamp(
     components = connected_component_count(sprite.opaque_mask)
     if components > 4:
         warnings.append(f"source has {components} disconnected components")
-    cw, ch = sprite.content_size
-    sw, sh = sprite.size
-    if cw >= sw - 1 and ch >= sh - 1:
-        warnings.append("subject nearly fills the source canvas; background detection may be unreliable")
 
-    # Stage: reference style (needed before geometry for target occupancy).
+    # Reference style (needed before geometry for target occupancy).
     style, used_refs = resolve_reference_style(sprite, config, reference_paths or [], warnings)
     if config.reference_mode == "palette" and used_refs:
-        # Palette-only donors: ignore geometry statistics from the reference.
         style.occupancy = 0.0
     target_occ = style.occupancy if used_refs and style.occupancy > 0 else None
 
-    # Stage: geometry normalisation.
+    # Geometry normalisation.
     norm = normalize_geometry(src_idx, sprite.bbox, roles, config, target_occ)
     warnings.extend(norm.warnings)
-    if norm.scale != 1.0:
-        # Pixels removed by a 1px opening are one-pixel-wide structures.
-        thin = sprite.opaque_mask & ~dilate(erode(sprite.opaque_mask, 1), 1)
-        if thin.any() or norm.scale < 1.0:
-            warnings.append(f"very thin structures ({int(thin.sum())} px) may be lost or thickened by scaling")
-    if debug_dir:
-        save_rgba_png(index_to_rgba(norm.idx, src_palette), debug_dir / "03_normalized.png")
-        save_rgba_png(render_role_map(norm.idx, roles), debug_dir / "04_roles.png")
-
-    # Stage: hue families.
-    families = group_families(infos, kind)
-    color_to_family: dict[RGB, tuple[int, int]] = {}
-    for f in families:
-        for rgb, lvl in f.levels.items():
-            color_to_family[rgb] = (f.id, lvl)
-    family_map = np.full(norm.mask.shape, -1, dtype=np.int32)
-    level = np.zeros(norm.mask.shape, dtype=np.int8)
-    for i, rgb in enumerate(src_palette):
-        m = norm.idx == i
-        if roles[i] in (ColorRole.OUTLINE, ColorRole.INTERNAL_LINE):
-            family_map[m] = -2
-        else:
-            fid, lvl = color_to_family[rgb]
-            family_map[m] = fid
-            level[m] = lvl
+    stages["03_normalized"] = index_to_rgba(norm.idx, src_palette)
+    stages["04_roles"] = render_role_map(norm.idx, roles)
 
     protected = protected_mask(norm, roles, infos, kind)
 
-    # Stage: RECOLOUR FIRST. With a same-species reference every body pixel is assigned to an
-    # official colour region (by position on the body + colour compatibility) before any
-    # outline or shading work - the "switch out the colours" step of a hand-made revamp.
-    # Trainers are redesigned between generations, so position matching does not apply.
+    # Hand-painted source pixels: locate them on the canvas, protect them from every
+    # automatic decision, and remember their exact colour for the end.
+    pinned_mask = np.zeros(norm.mask.shape, dtype=bool)
+    pinned_rgb = np.zeros(norm.mask.shape + (3,), dtype=np.uint8)
+    if pinned_pixels:
+        bx, by = sprite.bbox[0], sprite.bbox[1]
+        ox, oy = norm.offset
+        for (x, y), rgb in pinned_pixels.items():
+            cx = ox + int(round((x - bx) * norm.scale))
+            cy = oy + int(round((y - by) * norm.scale))
+            if 0 <= cx < norm.mask.shape[1] and 0 <= cy < norm.mask.shape[0] and norm.mask[cy, cx]:
+                pinned_mask[cy, cx] = True
+                pinned_rgb[cy, cx] = rgb
+        protected |= pinned_mask
+        if pinned_mask.any():
+            warnings.append(f"{int(pinned_mask.sum())} hand-painted pixels kept exactly as painted")
+
+    # RECOLOUR FIRST (same-species Pokémon): every body pixel -> an official colour region.
     recolored = (
         recolor_same_species(norm.idx, norm.mask, infos, roles, protected, style)
-        if style.same_subject and kind != "trainer"
+        if (style.same_subject and kind != "trainer" and config.recolor)
         else None
     )
     if recolored is not None:
         families = recolored.families
         family_map = recolored.family_map
         level = recolored.level
-        dither_mask = recolored.dither_mask
         warnings.append(f"recoloured {recolored.n_pixels} body pixels into {len(families)} official colour regions by position")
     else:
-        # Style-only / no reference: hue families from the source plus GBC-convention fixups.
         families = group_families(infos, kind)
         color_to_family: dict[RGB, tuple[int, int]] = {}
         for f in families:
@@ -486,8 +571,15 @@ def run_revamp(
                 level[m] = lvl
         dither_mask = np.zeros(norm.mask.shape, dtype=bool)
         warnings.extend(heuristic_regions(norm, infos, roles, src_palette, families, color_to_family, family_map, level, dither_mask, protected, style))
+        if not config.recolor and style.same_subject:
+            warnings.append("positional recolour disabled; colours matched by hue only")
 
-    # Stage: palette (after the family map is final).
+    # Manual colour overrides win over everything automatic.
+    notes = apply_color_map(config, infos, roles, norm, families, family_map, level, style)
+    if notes:
+        warnings.append("manual colour map: " + ", ".join(notes))
+
+    # Palette.
     ys_all, xs_all = np.nonzero(norm.mask)
     bx0, by0 = xs_all.min(), ys_all.min()
     bw, bh = max(1, xs_all.max() - bx0), max(1, ys_all.max() - by0)
@@ -497,39 +589,43 @@ def run_revamp(
         if len(fx):
             centroids[f.id] = (float((fx.mean() - bx0) / bw), float((fy.mean() - by0) / bh))
     outline_rgb, ramps = build_palette(infos, families, style, config, centroids)
-    if debug_dir:
-        flat = RenderState(
-            idx=norm.idx, mask=norm.mask, family_map=family_map, level=level, line=np.zeros(norm.mask.shape, np.int8),
-            protected=protected, families=families, outline_rgb=outline_rgb, source_palette=src_palette, source_roles=roles,
-        )
-        save_rgba_png(render(flat), debug_dir / "05_recolored.png")
-    # A family identified as the body's GBC shading colour becomes shadow *of* the body, so
-    # shade synthesis credits it and never re-shades it with its own darker tones.
     for f in families:
         if f.shade_of is not None:
             m = family_map == f.id
             level[m] = np.clip(level[m] - 1, -2, 2)
             family_map[m] = f.shade_of
-    if debug_dir:
-        preview = [outline_rgb] + [c for r in ramps for c in (r.deep, r.shadow, r.base, r.light, r.highlight, r.line)]
-        save_rgba_png(palette_preview(preview), debug_dir / "05_palette_preview.png")
+    flat = RenderState(
+        idx=norm.idx, mask=norm.mask, family_map=family_map, level=level, line=np.zeros(norm.mask.shape, np.int8),
+        protected=protected, families=families, outline_rgb=outline_rgb, source_palette=src_palette, source_roles=roles,
+    )
+    stages["05_recolored"] = render(flat)
+    preview = [outline_rgb] + [c for r in ramps for c in (r.deep, r.shadow, r.base, r.light, r.highlight, r.line)]
+    stages["05_palette_preview"] = palette_preview(preview)
     source_dark = family_map == -2
 
-    # Stage: outlines.
+    # Outlines.
     family_L = {f.id: f.base.L for f in families}
-    outline = reconstruct_outline(
-        norm.mask, source_dark, family_map, family_L, protected, config, style, (config.light_x, config.light_y)
-    )
-    line = outline.line
-    # Dark pixels thinned out of 2px strokes become the owner family's shadow.
-    thinned = source_dark & (line == 0)
-    if thinned.any():
-        owner = outline.owner.copy()
-        need = thinned & (owner < 0)
-        if need.any():
-            owner[need] = nearest_label(family_map, (family_map >= 0) & ~protected)[need]
-        family_map[thinned] = owner[thinned]
-        level[thinned] = -1
+    if config.rebuild_outline:
+        outline = reconstruct_outline(
+            norm.mask, source_dark, family_map, family_L, protected, config, style, (config.light_x, config.light_y)
+        )
+        line = outline.line
+        owner_map = outline.owner
+        thinned = source_dark & (line == 0)
+        if thinned.any():
+            owner = outline.owner.copy()
+            need = thinned & (owner < 0)
+            if need.any():
+                owner[need] = nearest_label(family_map, (family_map >= 0) & ~protected)[need]
+            family_map[thinned] = owner[thinned]
+            level[thinned] = -1
+    else:
+        from gbc_to_gba_pokerevamp.outline import LINE_BLACK
+
+        line = np.where(source_dark, LINE_BLACK, 0).astype(np.int8)
+        owner_map = np.full(norm.mask.shape, -1, dtype=np.int32)
+    valid_body = (family_map >= 0) & ~protected
+    fallback_owner = nearest_label(family_map, valid_body) if valid_body.any() else family_map
     state = RenderState(
         idx=norm.idx,
         mask=norm.mask,
@@ -541,56 +637,48 @@ def run_revamp(
         outline_rgb=outline_rgb,
         source_palette=src_palette,
         source_roles=roles,
-        line_family=np.where(outline.owner >= 0, outline.owner, nearest_label(family_map, (family_map >= 0) & ~protected)),
+        line_family=np.where(owner_map >= 0, owner_map, fallback_owner),
     )
-    if debug_dir:
-        save_rgba_png(render(state), debug_dir / "06_outlined.png")
+    stages["06_outlined"] = render(state)
 
-    # Stage: shading.
-    shade_cfg = config
-    if n_src_colors > 12:
-        shade_cfg = config.model_copy(update={"shading_strength": config.shading_strength * 0.4, "highlight_strength": 0.0})
-    state.level = synthesize_shading(norm.mask, family_map, level, protected, families, shade_cfg, style)
+    # Shading.
+    if config.shade:
+        shade_cfg = config
+        if n_src_colors > 12:
+            shade_cfg = config.model_copy(update={"shading_strength": config.shading_strength * 0.4, "highlight_strength": 0.0})
+        state.level = synthesize_shading(norm.mask, family_map, level, protected, families, shade_cfg, style)
     shaded = render(state)
-    if debug_dir:
-        save_rgba_png(shaded, debug_dir / "07_shaded.png")
-        save_rgba_png(render_level_map(norm.mask, state.level, state.line), debug_dir / "07_levels.png")
+    stages["07_shaded"] = shaded
+    stages["07_levels"] = render_level_map(norm.mask, state.level, state.line)
 
-    # Stage: cleanup (never touches linework).
+    # Cleanup (never touches linework).
     keep = state.line > 0
     cleaned, n_changed = remove_isolated_pixels(shaded, protected, keep, config.cleanup_strength)
-    if debug_dir:
-        save_rgba_png(cleaned, debug_dir / "08_cleaned.png")
+    if pinned_mask.any():
+        cleaned = cleaned.copy()
+        cleaned[pinned_mask, :3] = pinned_rgb[pinned_mask]
+        cleaned[pinned_mask, 3] = 255
+    stages["08_cleaned"] = cleaned
 
-    # Stage: palette enforcement.
-    protected_colors = [outline_rgb] + [state.source_palette[i] for i in np.unique(norm.idx[protected]) if i >= 0]
-    final, merge_warnings = enforce_color_limit(cleaned, config.max_opaque_colors, protected_colors)
-    warnings.extend(merge_warnings)
+    # Palette enforcement.
+    if config.enforce_palette:
+        protected_colors = [outline_rgb] + [state.source_palette[i] for i in np.unique(norm.idx[protected]) if i >= 0]
+        if pinned_mask.any():
+            protected_colors += [tuple(int(v) for v in c) for c in np.unique(pinned_rgb[pinned_mask], axis=0)]  # type: ignore[misc]
+        final, merge_warnings = enforce_color_limit(cleaned, config.max_opaque_colors, protected_colors)
+        warnings.extend(merge_warnings)
+    else:
+        final = cleaned
     if not np.all((final[..., 3] == 0) | (final[..., 3] == 255)):
         raise RevampError("internal error: partially transparent pixels in final output")
-    if debug_dir:
-        save_rgba_png(final, debug_dir / "09_final.png")
-
-    save_rgba_png(final, output_path)
-    if config.indexed_output:
-        save_indexed_png(final, run_dir / "revamped_indexed.png", config.max_colors)
-
-    compare_path: Path | None = None
-    if config.compare:
-        compare_path = run_dir / "compare.png"
-        images = [sprite.image, rgba_to_image(final)]
-        labels = [f"source: {input_path.name}", "revamp"]
-        if used_refs:
-            images.append(load_sprite(used_refs[0]).image)
-            labels.append(f"reference: {used_refs[0].name}")
-        compare_sheet(images, labels, scale=4).save(compare_path, format="PNG")
+    stages["09_final"] = final
 
     opaque = final[..., 3] > 0
     target_colors = np.unique(final[opaque][:, :3], axis=0)
     ys, xs = np.nonzero(opaque)
     report = ConversionReport(
-        input=str(input_path),
-        output=str(output_path),
+        input=input_name,
+        output="",
         kind=kind,
         style=config.style,
         reference_files=[str(p) for p in used_refs],
@@ -633,6 +721,54 @@ def run_revamp(
         config=config.model_dump(),
         warnings=warnings,
     )
+    return RevampOutcome(
+        final=final, stages=stages, sprite=sprite, infos=infos, style=style, used_refs=used_refs,
+        families=families, norm=norm, report=report, warnings=warnings,
+    )
+
+
+def run_revamp(
+    input_path: Path,
+    output_root: Path,
+    config: RevampConfig,
+    reference_paths: list[Path] | None = None,
+) -> RevampResult:
+    """Convert one sprite. Writes into `<output_root>/<name>/`:
+
+    revamped.png, compare.png (source | revamp | reference), report.json, debug/ (opt).
+    """
+    kind = infer_kind(input_path, config)
+    config = config.model_copy(update={"kind": kind})
+    sprite = load_sprite(input_path, kind=kind)  # type: ignore[arg-type]
+    outcome = revamp_sprite(sprite, config, reference_paths, input_name=str(input_path))
+
+    run_dir = run_dir_for(input_path, output_root)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    output_path = run_dir / "revamped.png"
+    debug_dir: Path | None = None
+    if config.debug:
+        debug_dir = run_dir / "debug"
+        debug_dir.mkdir(parents=True, exist_ok=True)
+        for name, img in outcome.stages.items():
+            save_rgba_png(img, debug_dir / f"{name}.png")
+
+    final = outcome.final
+    save_rgba_png(final, output_path)
+    if config.indexed_output:
+        save_indexed_png(final, run_dir / "revamped_indexed.png", config.max_colors)
+
+    compare_path: Path | None = None
+    if config.compare:
+        compare_path = run_dir / "compare.png"
+        images = [outcome.sprite.image, rgba_to_image(final)]
+        labels = [f"source: {input_path.name}", "revamp"]
+        if outcome.used_refs:
+            images.append(load_sprite(outcome.used_refs[0]).image)
+            labels.append(f"reference: {outcome.used_refs[0].name}")
+        compare_sheet(images, labels, scale=4).save(compare_path, format="PNG")
+
+    report = outcome.report
+    report.output = str(output_path)
     report_path: Path | None = None
     if config.report:
         report_path = run_dir / "report.json"
