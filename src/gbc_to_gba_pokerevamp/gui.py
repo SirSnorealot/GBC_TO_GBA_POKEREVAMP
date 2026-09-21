@@ -266,9 +266,18 @@ class RevampApp(tk.Tk):
                 if w is canvas or w is left:
                     canvas.yview_scroll(int(-e.delta / 120), "units")
                     return
+                if w is self.preview:
+                    if e.state & 0x1:  # Shift held -> horizontal
+                        self.preview.xview_scroll(int(-e.delta / 120), "units")
+                    else:
+                        self.preview.yview_scroll(int(-e.delta / 120), "units")
+                    return
                 w = w.master  # type: ignore[assignment]
 
         self.bind_all("<MouseWheel>", _wheel)
+        self.bind_all("<Shift-MouseWheel>", lambda e: self.preview.xview_scroll(int(-e.delta / 120), "units"))
+        self.bind_all("<Control-z>", lambda e: self.undo())
+        self.bind_all("<Control-Z>", lambda e: self.undo())
 
         # Sprite
         f = ttk.LabelFrame(left, text="Sprite", padding=6)
@@ -395,6 +404,11 @@ class RevampApp(tk.Tk):
         self.status.pack(side="right")
         self.preview = self._reg(tk.Canvas(right, highlightthickness=0), "canvas")
         self.preview.grid(row=1, column=0, sticky="nsew")
+        pv_y = ttk.Scrollbar(right, orient="vertical", command=self.preview.yview)
+        pv_y.grid(row=1, column=1, sticky="ns")
+        pv_x = ttk.Scrollbar(right, orient="horizontal", command=self.preview.xview)
+        pv_x.grid(row=2, column=0, sticky="ew")
+        self.preview.configure(yscrollcommand=pv_y.set, xscrollcommand=pv_x.set)
         self.preview.bind("<Button-1>", self._on_press)
         self.preview.bind("<B1-Motion>", self._on_drag)
         self.preview.bind("<ButtonRelease-1>", self._on_release)
@@ -402,9 +416,9 @@ class RevampApp(tk.Tk):
         self.preview.bind("<Motion>", self._on_motion)
         self.preview.bind("<Configure>", lambda e: self.redraw())
         self.hover = ttk.Label(right, text="", style="Muted.TLabel")
-        self.hover.grid(row=2, column=0, sticky="w")
+        self.hover.grid(row=3, column=0, sticky="w")
         self.log = self._reg(tk.Text(right, height=5, wrap="word", state="disabled", font=("Consolas", 9), relief="flat"), "text")
-        self.log.grid(row=3, column=0, sticky="ew", pady=(4, 0))
+        self.log.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(4, 0))
 
         self.set_tool("pencil")
         self._refresh_ref_list()
@@ -644,9 +658,12 @@ class RevampApp(tk.Tk):
             x += cw + pad
         self._photo = ImageTk.PhotoImage(sheet)
         self.preview.create_image(0, 0, anchor="nw", image=self._photo)
+        self.preview.configure(scrollregion=(0, 0, total_w, total_h))
 
     def _hit(self, ex: int, ey: int) -> tuple[str, int, int] | None:
-        """Panel name and image pixel under a canvas coordinate."""
+        """Panel name and image pixel under a window coordinate (accounts for scrolling)."""
+        ex = int(self.preview.canvasx(ex))
+        ey = int(self.preview.canvasy(ey))
         for which, x0, y0, z, ox, oy, w, h in self._panel_boxes:
             px, py = (ex - x0) // z - ox, (ey - y0) // z - oy
             if 0 <= px < w and 0 <= py < h and x0 <= ex < x0 + CANVAS * z and y0 <= ey < y0 + CANVAS * z:
