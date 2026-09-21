@@ -53,6 +53,7 @@ class RevampConfig(BaseModel):
     rebuild_outline: bool = True
     shade: bool = True
     enforce_palette: bool = True
+    lock_palette: bool = True  # output uses only the reference sprite's exact colors
     # Manual color mapping: source "r,g,b" -> target "r,g,b" (a reference/any color),
     # or one of "auto", "keep", "outline", "transparent".
     color_map: dict[str, str] = Field(default_factory=dict)

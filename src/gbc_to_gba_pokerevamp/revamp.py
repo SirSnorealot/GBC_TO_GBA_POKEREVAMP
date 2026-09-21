@@ -452,6 +452,34 @@ def apply_color_map(
     return notes
 
 
+def _reference_palette(style: ReferenceStyle, used_refs: list[Path]) -> list[RGB]:
+    """Exact opaque colors of the primary reference sprite."""
+    if not used_refs:
+        return []
+    ref = load_sprite(used_refs[0])
+    colors = np.unique(ref.rgba[ref.opaque_mask][:, :3], axis=0)
+    return [tuple(int(v) for v in c) for c in colors]  # type: ignore[misc]
+
+
+def snap_to_palette_image(rgba: np.ndarray, palette: list[RGB]) -> np.ndarray:
+    """Replace every opaque pixel with the perceptually nearest palette color."""
+    from gbc_to_gba_pokerevamp.colorspace import rgb_to_lab
+
+    out = rgba.copy()
+    opaque = out[..., 3] > 0
+    if not opaque.any():
+        return out
+    colors = np.unique(out[opaque][:, :3], axis=0)
+    pal = np.array(palette, dtype=np.uint8)
+    pal_lab = rgb_to_lab(pal)
+    col_lab = rgb_to_lab(colors)
+    nearest = np.argmin(((col_lab[:, None, :] - pal_lab[None, :, :]) ** 2).sum(-1), axis=1)
+    for c, n in zip(colors, nearest):
+        m = opaque & np.all(out[..., :3] == c, axis=-1)
+        out[m, :3] = pal[n]
+    return out
+
+
 def revamp_sprite(
     sprite: SpriteImage,
     config: RevampConfig,
@@ -660,8 +688,15 @@ def revamp_sprite(
         cleaned[pinned_mask, 3] = 255
     stages["08_cleaned"] = cleaned
 
+    # Palette lock: the output uses only colors that exist in the reference sprite, so the
+    # revamp drops straight into the same 16-color palette. Nearest color in Lab.
+    ref_palette = _reference_palette(style, used_refs) if (config.lock_palette and used_refs and style.adopt_colors) else []
+    if ref_palette:
+        cleaned = snap_to_palette_image(cleaned, ref_palette)
+        warnings.append(f"output palette locked to the reference's {len(ref_palette)} colors")
+
     # Palette enforcement.
-    if config.enforce_palette:
+    if config.enforce_palette and not ref_palette:
         protected_colors = [outline_rgb] + [state.source_palette[i] for i in np.unique(norm.idx[protected]) if i >= 0]
         if pinned_mask.any():
             protected_colors += [tuple(int(v) for v in c) for c in np.unique(pinned_rgb[pinned_mask], axis=0)]  # type: ignore[misc]

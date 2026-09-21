@@ -52,6 +52,7 @@ EFFECTS = [
     ("Recolor to reference layout", "recolor"),
     ("Rebuild outline", "rebuild_outline"),
     ("Add shading", "shade"),
+    ("Lock output palette to the reference's colors", "lock_palette"),
     ("Limit to 15 colors", "enforce_palette"),
     ("Treat reference as same Pokémon", "force_same_subject"),
 ]
