@@ -2,13 +2,13 @@
 
 An interactive editor for turning Game Boy / Game Boy Color Pokémon battle sprites
 (Red/Blue, Yellow, Gold, Silver, Crystal) into Game Boy Advance-style revamps
-(FireRed/LeafGreen/Emerald look: 64×64 canvas, ≤15 colours + transparency, coloured
+(FireRed/LeafGreen/Emerald look: 64×64 canvas, ≤15 colors + transparency, colored
 outlines, real shading).
 
 It is an **assistant, not a converter**. An automatic pass gives you a starting point — the
-official Gen III sprite's colours laid onto your sprite, a rebuilt outline, synthesised
-shading — and then you finish it by hand, live: pick any colour from the reference and paint
-pixels or whole regions on the original or on the result, remap a source colour wholesale,
+official Gen III sprite's colors laid onto your sprite, a rebuilt outline, synthesized
+shading — and then you finish it by hand, live: pick any color from the reference and paint
+pixels or whole regions on the original or on the result, remap a source color wholesale,
 toggle each effect, drag the sliders. Everything updates in the preview as you work.
 
 ## Requirements
@@ -47,40 +47,40 @@ Dark theme by default (**Theme** button toggles). Left column = controls, right 
 | panel | what it does |
 |---|---|
 | **Sprite** | open any PNG; kind (pokemon / trainer) and style (frlg / emerald / gen3-mixed) |
-| **Gen III reference** | *Auto* (same species when the file name matches, else shape-alikes for shading style only), *None* (keep the source's own colours), or *Pick* from the searchable list / browse to any PNG. *Download refs…* fetches the sprite corpus. |
-| **Paint** | **Pick colour** (click any panel, including the reference), **Pencil** (click / drag), **Fill region** (click recolours the connected same-colour area), **Undo** (per stroke). The palette shows every colour of the reference (one row per colour region, dark → light), the source colours and the result colours; *Custom…* and *Transparent* too. Paint on the **Source** or on the **Result** — either way, pixels you paint are kept exactly as painted; the automatic colouring and shading never touch them. Right-click a painted pixel to erase that edit. |
-| **Colour mapping** | one row per source colour: swatch, role, pixel count, what it currently becomes, and an **override** to send every pixel of that colour to a chosen reference colour, *Keep*, *Outline*, *Transparent* (fixes background mis-detection) or *Custom*. Clicking a source pixel with the Pick tool highlights its row. |
-| **Effects** | toggle positional recolour, outline rebuild, shading, 15-colour limit; *Treat reference as same Pokémon* forces full colour adoption for a hand-picked reference |
+| **Gen III reference** | *Auto* (same species when the file name matches, else shape-alikes for shading style only), *None* (keep the source's own colors), or *Pick* from the searchable list / browse to any PNG. **Shiny palette** swaps the reference for its shiny version (from the decomp's `shiny.pal`) so you can preview the revamp in shiny colors. *Download refs…* fetches the sprite corpus. |
+| **Paint** | **Pick color** (click any panel, including the reference), **Pencil** (click / drag), **Fill region** (click recolors the connected same-color area), **Undo** (per stroke). The palette shows every color of the reference (one row per color region, dark → light), the source colors and the result colors; *Custom…* and *Transparent* too. Paint on the **Source** or on the **Result** — either way, pixels you paint are kept exactly as painted; the automatic coloring and shading never touch them. Right-click a painted pixel to erase that edit. |
+| **Color mapping** | one row per source color: swatch, role, pixel count, what it currently becomes, and an **override** to send every pixel of that color to a chosen reference color, *Keep*, *Outline*, *Transparent* (fixes background mis-detection) or *Custom*. Clicking a source pixel with the Pick tool highlights its row. |
+| **Effects** | toggle positional recolor, outline rebuild, shading, 15-color limit; *Treat reference as same Pokémon* forces full color adoption for a hand-picked reference |
 | **Tuning** | shading / outline / highlight / hue-shift / reference-weight / cleanup strengths and light direction |
-| **Preview** | Source ❘ Result ❘ Reference; zoom or *fit*; checker / dark / light background; *Show* switches the result panel to any intermediate stage (flat recolour, outlined, shaded, level map…). Hovering shows the pixel coordinate and colour. |
-| **Output** | *Save to output/* writes `output\<name>\revamped.png`, `compare.png`, `report.json` and `session.json`. *Save / Load session* stores every setting, the colour map and all paint edits, so you can come back to a sprite later. |
+| **Preview** | Source ❘ Result ❘ Reference; zoom or *fit*; checker / dark / light background; *Show* switches the result panel to any intermediate stage (flat recolor, outlined, shaded, level map…). Hovering shows the pixel coordinate and color. |
+| **Output** | *Save to output/* writes `output\<name>\revamped.png`, `compare.png`, `report.json` and `session.json`. *Save / Load session* stores every setting, the color map and all paint edits, so you can come back to a sprite later. |
 
 ## What the automatic pass does
 
 ```text
-detect background → colour roles → centre on 64×64 (no enlargement)
-→ pick reference → RECOLOUR (same species: every body pixel → the official colour region at
-  that position; else hue-matched families) → manual colour map
-→ outline rebuild (1 px; black only in shadow, dark local colour elsewhere, highlight tone on
+detect background → color roles → center on 64×64 (no enlargement)
+→ pick reference → RECOLOR (same species: every body pixel → the official color region at
+  that position; else hue-matched families) → manual color map
+→ outline rebuild (1 px; black only in shadow, dark local color elsewhere, highlight tone on
   lit edges) → shading (each body part lit as its own rounded form, in the reference's
-  proportions) → stray-pixel cleanup → ≤15 colours
+  proportions) → stray-pixel cleanup → ≤15 colors
 ```
 
 Red/Blue/Yellow sprites are stored monochrome in the games; bootstrap applies each species'
-Super Game Boy palette so they arrive in colour. Yellow's outside-the-outline anti-aliasing is
+Super Game Boy palette so they arrive in color. Yellow's outside-the-outline anti-aliasing is
 folded into the outline. GBC dithering becomes solid shades; thick black masses become the
-official dark body colour.
+official dark body color.
 
 Pixel-art rules are never broken: no resampling, no anti-aliasing, alpha is exactly 0 or 255.
 
 ## Limitations
 
-- The pose is never redrawn. The sprite stays in its GBC pose; only colours, outline and
+- The pose is never redrawn. The sprite stays in its GBC pose; only colors, outline and
   shading change. Where the official Gen III sprite has a different pose, position-based
-  recolouring can put a colour on the wrong part — that is what the paint tools are for.
-- A colour the source does not have cannot be inferred (Yellow Pikachu has no red cheeks).
+  recoloring can put a color on the wrong part — that is what the paint tools are for.
+- A color the source does not have cannot be inferred (Yellow Pikachu has no red cheeks).
   Paint it.
-- Trainers get hue-matched colours only; their Gen III redesigns rarely share a layout.
+- Trainers get hue-matched colors only; their Gen III redesigns rarely share a layout.
 
 ## Data notice
 
@@ -99,14 +99,14 @@ Every copied image is recorded in `data/manifests/sources.json` with repository,
 ## Project layout
 
 ```text
-assets/manifests/sources.json   acquisition rules + name normalisation
+assets/manifests/sources.json   acquisition rules + name normalization
 scripts/bootstrap_assets.py     same as `gbc_to_gba_pokerevamp --bootstrap`
 src/gbc_to_gba_pokerevamp/
   cli.py        launcher (--bootstrap, --version)
   gui.py        the editor (tkinter)
   revamp.py     automatic pass: revamp_sprite() -> final image + every stage
-  recolor.py    same-species positional recolour
-  palette.py    colour families, shade ramps, colour-limit enforcement
+  recolor.py    same-species positional recolor
+  palette.py    color families, shade ramps, color-limit enforcement
   outline.py    outline rebuild        shading.py   shade synthesis
   analyze.py    background, roles      normalize.py canvas placement
   references.py reference indexing / style extraction / ranking

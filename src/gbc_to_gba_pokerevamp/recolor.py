@@ -1,13 +1,13 @@
-"""Recolour stage for same-species conversions: assign every body pixel to an official colour
-region *before* any outline or shading work ("switch out the colours" from the revamp guide).
+"""Recolor stage for same-species conversions: assign every body pixel to an official color
+region *before* any outline or shading work ("switch out the colors" from the revamp guide).
 
-Each source colour (plus dithered mixes and thick black masses, treated as pseudo-colours) is
-scored against every reference colour family by
+Each source color (plus dithered mixes and thick black masses, treated as pseudo-colors) is
+scored against every reference color family by
   * position  - where that family sits on the official sprite (blurred layout map), and
-  * colour    - similar lightness, similar hue when both are chromatic, white -> white.
-The per-pixel winner is smoothed into coherent patches. Within each region the source colours
+  * color    - similar lightness, similar hue when both are chromatic, white -> white.
+The per-pixel winner is smoothed into coherent patches. Within each region the source colors
 are ranked by lightness so the main one becomes the region's base tone and the GBC "shading
-colour" lands on its shadow tone.
+color" lands on its shadow tone.
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ def _pseudo_info(rgb: RGB, count: int) -> ColorInfo:
 
 
 def _layout_maps(style: ReferenceStyle) -> dict[int, np.ndarray]:
-    """Blurred, per-cell-normalised probability of each reference family over the ref bbox."""
+    """Blurred, per-cell-normalized probability of each reference family over the ref bbox."""
     grid = style.family_grid
     assert grid is not None
     maps: dict[int, np.ndarray] = {}
@@ -64,7 +64,7 @@ def _color_compat(c: ColorInfo, rf: dict, is_dominant_src: bool, ref_has_white: 
     comp = float(np.exp(-((c.L - ref_L) / 26.0) ** 2))
     if achro_c and c.L > 85 and not is_dominant_src:
         # Bellies / markings: the official white only if the sprite really has a white *region*
-        # (eye whites alone do not count), else a cream; a saturated body colour only when
+        # (eye whites alone do not count), else a cream; a saturated body color only when
         # nothing better exists (that is the "white shine" case).
         if achro_r and ref_L >= 85:
             return 1.0 if share >= 0.02 else 0.25
@@ -96,7 +96,7 @@ def recolor_same_species(
     bw, bh = max(1, xs_all.max() - bx0), max(1, ys_all.max() - by0)
     G = style.family_grid.shape[0]
 
-    # --- pseudo-colour map ---------------------------------------------------------------
+    # --- pseudo-color map ---------------------------------------------------------------
     line_role = {i for i, r in roles.items() if r in (ColorRole.OUTLINE, ColorRole.INTERNAL_LINE)}
     pcolor = np.full((h, w), -1, dtype=np.int32)
     pinfos: list[ColorInfo] = []
@@ -115,7 +115,7 @@ def recolor_same_species(
         key = (min(a, b), max(a, b))
         if key not in mixes:
             if a in line_role or b in line_role:
-                # Colour x black is how 2bpp drew a dark region; treat it as dark, not as a
+                # Color x black is how 2bpp drew a dark region; treat it as dark, not as a
                 # muddy mid-tone, so it lands on the reference's dark family at that spot.
                 mix_rgb = (28, 28, 28)
             else:
@@ -125,7 +125,7 @@ def recolor_same_species(
             pinfos.append(_pseudo_info(mix_rgb, 0))  # type: ignore[arg-type]
         pcolor[target] = mixes[key]
         dither_mask |= target
-    # Thick black is body, not line: the interior of dark masses becomes a "black" body colour.
+    # Thick black is body, not line: the interior of dark masses becomes a "black" body color.
     interior = erode(source_dark, 1, connectivity=8) & ~protected
     interior &= ~small_components(interior, 11)
     if interior.any():
@@ -157,8 +157,8 @@ def recolor_same_species(
     gy = np.clip(((ys - by0) / bh * (G - 1)).round().astype(int), 0, G - 1)
     scores = np.zeros((len(ref_ids), len(ys)), dtype=np.float64)
     pc = pcolor[ys, xs]
-    # How much position may override colour: a white belly is white wherever the official pose
-    # put it, while a black mass or the body colour follows the official layout closely.
+    # How much position may override color: a white belly is white wherever the official pose
+    # put it, while a black mass or the body color follows the official layout closely.
     pos_floor = np.zeros(len(ys))
     for pi in np.unique(pc):
         c = pinfos[pi]
@@ -175,7 +175,7 @@ def recolor_same_species(
     assign = np.full((h, w), -1, dtype=np.int32)
     assign[ys, xs] = np.array(ref_ids)[scores.argmax(axis=0)]
     # A black mass that lands on a *light* official region (an eye slit, a mouth) is linework,
-    # not a body colour: it stays black.
+    # not a body color: it stays black.
     black_like = [pi for pi in range(len(pinfos)) if pinfos[pi].chroma < ACHROMATIC_CHROMA and pinfos[pi].L < 25]
     if black_like:
         for rid in ref_ids:
@@ -193,7 +193,7 @@ def recolor_same_species(
             if pinfos[pi].chroma < ACHROMATIC_CHROMA and pinfos[pi].L > 85:
                 assign[light_prot & (pcolor == pi)] = white_ref
 
-    # --- smoothing into coherent patches (within each pseudo-colour) ---------------------
+    # --- smoothing into coherent patches (within each pseudo-color) ---------------------
     kernel = np.ones((5, 5), dtype=np.int32)
     locked = protected & body
     for _ in range(2):
@@ -207,7 +207,7 @@ def recolor_same_species(
                 new_assign[better] = rid
                 best_cnt[better] = cnt[better]
         assign = new_assign
-    # Patches too small to read as a region join the neighbouring assignment of the same colour.
+    # Patches too small to read as a region join the neighbouring assignment of the same color.
     for pi in np.unique(pc):
         m = pcolor == pi
         for rid in ref_ids:

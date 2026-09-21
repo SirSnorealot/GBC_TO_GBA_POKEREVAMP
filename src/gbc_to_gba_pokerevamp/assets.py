@@ -129,10 +129,10 @@ _MAP_LINE = re.compile(r"db\s+(PAL_\w+)\s*;\s*(\w+)")
 
 
 def load_gen1_palettes(repo_root: Path, spec: dict, aliases: dict[str, str]) -> tuple[dict[str, list[tuple[int, int, int]]], dict[str, str]]:
-    """Parse Red/Blue/Yellow SGB palettes: PAL name -> 4 RGB colours, species -> PAL name.
+    """Parse Red/Blue/Yellow SGB palettes: PAL name -> 4 RGB colors, species -> PAL name.
 
-    Gen 1 sprites are stored as 4-shade greyscale; the game colours them per species using
-    these tables, so applying them here gives the sprites the colours players actually saw.
+    Gen 1 sprites are stored as 4-shade grayscale; the game colors them per species using
+    these tables, so applying them here gives the sprites the colors players actually saw.
     """
     cfg = spec.get("gen1_palettes")
     if not cfg:
@@ -140,7 +140,7 @@ def load_gen1_palettes(repo_root: Path, spec: dict, aliases: dict[str, str]) -> 
     table_path = repo_root / cfg["table"]
     map_path = repo_root / cfg["map"]
     if not table_path.exists() or not map_path.exists():
-        console.print(f"[yellow]warning:[/] Gen 1 palette files not found in {repo_root}; sprites stay greyscale")
+        console.print(f"[yellow]warning:[/] Gen 1 palette files not found in {repo_root}; sprites stay grayscale")
         return {}, {}
     palettes: dict[str, list[tuple[int, int, int]]] = {}
     for m in _RGB_LINE.finditer(table_path.read_text(encoding="utf-8", errors="replace")):
@@ -155,7 +155,7 @@ def load_gen1_palettes(repo_root: Path, spec: dict, aliases: dict[str, str]) -> 
 
 
 def colorize_gen1(img: Image.Image, colors: list[tuple[int, int, int]]) -> Image.Image:
-    """Map a 4-shade greyscale sprite onto a 4-colour SGB palette (lightest -> colors[0])."""
+    """Map a 4-shade grayscale sprite onto a 4-color SGB palette (lightest -> colors[0])."""
     gray = np.array(img.convert("L"))
     levels = np.unique(gray)
     if len(levels) <= 4:
@@ -196,6 +196,81 @@ def prepare_image(path: Path, generation: int, gen1_colors: list[tuple[int, int,
         return colorize_gen1(img, gen1_colors), cropped
     # Gen 1/2: keep the opaque light background so the pipeline exercises background inference.
     return img.convert("RGB"), cropped
+
+
+def _find_pal(path: Path, name: str) -> Path | None:
+    for d in (path.parent, path.parent.parent):
+        cand = d / name
+        if cand.exists():
+            return cand
+    return None
+
+
+def _read_jasc_pal(path: Path) -> list[tuple[int, int, int]] | None:
+    lines = [ln.strip() for ln in path.read_text(encoding="utf-8", errors="replace").splitlines() if ln.strip()]
+    if len(lines) < 3 or lines[0] != "JASC-PAL":
+        return None
+    try:
+        n = int(lines[2])
+        colors = [tuple(int(v) for v in ln.split()[:3]) for ln in lines[3 : 3 + n]]
+    except ValueError:
+        return None
+    return colors if len(colors) == n else None  # type: ignore[return-value]
+
+
+_RGB2 = re.compile(r"RGB\s+(\d+)\s*,\s*(\d+)\s*,\s*(\d+)")
+
+
+def shiny_variant(path: Path, generation: int) -> Image.Image | None:
+    """Build the shiny-palette version of a front sprite from the decomp's shiny.pal.
+
+    Gen 3: the indexed PNG's palette is swapped for the 16 JASC entries (same index order).
+    Gen 2: shiny.pal holds the two middle colors; white and black are fixed, so the PNG's four
+    colors are ranked by lightness and the middle two replaced.
+    """
+    pal_path = _find_pal(path, "shiny.pal")
+    if pal_path is None:
+        return None
+    img = Image.open(path)
+    img.load()
+    w, h = img.size
+    if h > w and h % w == 0:
+        img = img.crop((0, 0, w, w))
+    if generation >= 3:
+        if img.mode != "P":
+            return None
+        colors = _read_jasc_pal(pal_path)
+        if not colors:
+            return None
+        idx = np.array(img)
+        pal = np.zeros((256, 3), dtype=np.uint8)
+        pal[: len(colors)] = np.array(colors, dtype=np.uint8)
+        rgba = np.zeros(idx.shape + (4,), dtype=np.uint8)
+        rgba[..., :3] = pal[idx]
+        rgba[..., 3] = np.where(idx == 0, 0, 255).astype(np.uint8)
+        rgba[idx == 0, :3] = 0
+        return Image.fromarray(rgba, "RGBA")
+    if generation == 2:
+        mids = [tuple(round(int(v) * 255 / 31) for v in m.groups()) for m in _RGB2.finditer(pal_path.read_text(encoding="utf-8", errors="replace"))]
+        if len(mids) < 2:
+            return None
+        rgb = np.array(img.convert("RGB"))
+        flat = rgb.reshape(-1, 3)
+        uniq = np.unique(flat, axis=0)
+        if len(uniq) < 3 or len(uniq) > 4:
+            return None
+        order = sorted(range(len(uniq)), key=lambda i: -(0.299 * uniq[i][0] + 0.587 * uniq[i][1] + 0.114 * uniq[i][2]))
+        # lightest stays (white/background), darkest stays (black), the middle ones go shiny
+        mapping = {tuple(int(v) for v in uniq[order[0]]): tuple(int(v) for v in uniq[order[0]])}
+        mapping[tuple(int(v) for v in uniq[order[-1]])] = tuple(int(v) for v in uniq[order[-1]])
+        middle = order[1:-1]
+        for k, i in enumerate(middle):
+            mapping[tuple(int(v) for v in uniq[i])] = mids[min(k, 1)]  # type: ignore[assignment]
+        out = rgb.copy()
+        for src, dst in mapping.items():
+            out[np.all(rgb == np.array(src, np.uint8), axis=-1)] = dst
+        return Image.fromarray(out, "RGB")
+    return None
 
 
 def _record(img: Image.Image, **kw) -> AssetRecord:
@@ -265,6 +340,17 @@ def bootstrap(update: bool = False, skip_clone: bool = False) -> dict:
                 records.append(rec)
                 by_kind_game.setdefault((kind, game), {})[name] = rec.local_path
                 count += 1
+                if kind == "pokemon" and gen >= 2:
+                    shiny = shiny_variant(src, gen)
+                    if shiny is not None:
+                        sdest = out_dir / f"{prefix}{name}_shiny.png"
+                        shiny.save(sdest, format="PNG", optimize=False)
+                        records.append(_record(
+                            shiny, id=f"{kind}:{name}:{game}:front_shiny", kind=kind, name=name, game_family=game,
+                            generation=gen, view="front_shiny", source_repo=f"pret/{clone_dir}", source_commit=commit,
+                            source_path=src.relative_to(repo_root).as_posix() + " + shiny.pal",
+                            local_path=sdest.relative_to(root).as_posix(), frame_cropped=cropped,
+                        ))
             console.print(f"  {game}: copied {count} {kind} front sprites")
 
     manifests = data / "manifests"

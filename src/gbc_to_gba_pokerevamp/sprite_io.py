@@ -82,7 +82,7 @@ def save_indexed_png(rgba: np.ndarray, path: Path, max_entries: int = 16) -> Non
     opaque = rgba[..., 3] > 0
     colors = np.unique(rgba[opaque][:, :3], axis=0)
     if len(colors) > max_entries - 1:
-        raise ValueError(f"Image has {len(colors)} opaque colours; indexed export allows {max_entries - 1}")
+        raise ValueError(f"Image has {len(colors)} opaque colors; indexed export allows {max_entries - 1}")
     lut = {tuple(int(v) for v in c): i + 1 for i, c in enumerate(colors)}
     h, w = opaque.shape
     idx = np.zeros((h, w), dtype=np.uint8)

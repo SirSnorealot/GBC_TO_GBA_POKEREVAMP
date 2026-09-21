@@ -14,7 +14,7 @@ COOL_HUE = 275.0  # shadows drift toward blue/violet
 WARM_HUE = 85.0  # lights drift toward yellow
 ACHROMATIC_CHROMA = 12.0
 FAMILY_HUE_TOLERANCE = 42.0
-REFERENCE_MATCH_HUE = 35.0  # max hue distance for adopting a reference family's colours
+REFERENCE_MATCH_HUE = 35.0  # max hue distance for adopting a reference family's colors
 
 
 @dataclass
@@ -22,11 +22,11 @@ class Family:
     id: int
     colors: list[ColorInfo]
     base: ColorInfo
-    levels: dict[RGB, int] = field(default_factory=dict)  # source colour -> ramp level
+    levels: dict[RGB, int] = field(default_factory=dict)  # source color -> ramp level
     achromatic: bool = False
     ramp: Ramp | None = None
     level_offset: int = 0  # reference level this family's base maps to (set by build_palette)
-    shade_of: int | None = None  # dominant family id when this family is its GBC shading colour
+    shade_of: int | None = None  # dominant family id when this family is its GBC shading color
     forced_ref: dict | None = None  # reference family chosen by position (same-species only)
 
     @property
@@ -35,19 +35,19 @@ class Family:
 
 
 def group_families(infos: list[ColorInfo], kind: str = "unknown", step_levels: bool = False) -> list[Family]:
-    """Cluster non-line source colours into hue families; each family becomes one shade ramp.
+    """Cluster non-line source colors into hue families; each family becomes one shade ramp.
 
-    `step_levels=True` (used for 16-colour references) assigns levels by lightness distance
+    `step_levels=True` (used for 16-color references) assigns levels by lightness distance
     from the base so two near-identical shades share a level instead of eating the light and
-    highlight slots; GBC sources with 1-2 colours per family use plain rank order.
+    highlight slots; GBC sources with 1-2 colors per family use plain rank order.
     """
     tolerance = FAMILY_HUE_TOLERANCE if kind != "trainer" else 28.0
     if step_levels:
-        # Gen III ramps: lit colours stay close in hue, shadows swing hard toward blue/red.
+        # Gen III ramps: lit colors stay close in hue, shadows swing hard toward blue/red.
         tolerance = 24.0
     locals_ = [c for c in infos if c.role not in (ColorRole.OUTLINE, ColorRole.INTERNAL_LINE)]
     if step_levels:
-        # Seed families with the lit colours so hue-shifted shadows attach to them, not vice versa.
+        # Seed families with the lit colors so hue-shifted shadows attach to them, not vice versa.
         locals_.sort(key=lambda c: (-c.L, -c.count))
     else:
         locals_.sort(key=lambda c: -c.count)
@@ -60,7 +60,7 @@ def group_families(infos: list[ColorInfo], kind: str = "unknown", step_levels: b
             if achro != f.achromatic:
                 continue
             if achro:
-                # Whites/greys join a single grey family only when both are light; dark greys stay separate.
+                # Whites/grays join a single gray family only when both are light; dark grays stay separate.
                 if (c.L > 60) == (f.base.L > 60):
                     best_f, best_d = f, 0.0
                     break
@@ -72,10 +72,10 @@ def group_families(infos: list[ColorInfo], kind: str = "unknown", step_levels: b
                 if c.chroma < 20.0 and f.base.chroma < 20.0:
                     slack += 20.0
             else:
-                # GBC shadow colours often sit far around the hue wheel from the body colour
-                # (Pikachu's red-orange under yellow), so clearly darker colours get more slack.
+                # GBC shadow colors often sit far around the hue wheel from the body color
+                # (Pikachu's red-orange under yellow), so clearly darker colors get more slack.
                 slack = tolerance + 30.0 if c.L < f.base.L - 20.0 else tolerance
-                # Hue is unreliable for low-chroma colours.
+                # Hue is unreliable for low-chroma colors.
                 slack += 1.5 * max(0.0, 25.0 - min(c.chroma, f.base.chroma))
             # Join the *closest* eligible family, not the first: a teal must not be captured by
             # a yellow-green just because that family was seeded earlier.
@@ -87,7 +87,7 @@ def group_families(infos: list[ColorInfo], kind: str = "unknown", step_levels: b
             families.append(Family(id=len(families), colors=[c], base=c, achromatic=achro))
     for f in families:
         if step_levels:
-            # Gen III artists often paint more shadow than base; the base is the lightest colour
+            # Gen III artists often paint more shadow than base; the base is the lightest color
             # that still covers a major share of the family, not simply the most frequent one.
             top = max(c.count for c in f.colors)
             major = [c for c in f.colors if c.count >= 0.5 * top]
@@ -150,7 +150,7 @@ def _blend_style(ref: ReferenceStyle, config: RevampConfig) -> ReferenceStyle:
 
 
 def _blend_lch(a: np.ndarray, b: np.ndarray, w: float) -> np.ndarray:
-    """Interpolate two LCh colours, taking the shortest hue arc."""
+    """Interpolate two LCh colors, taking the shortest hue arc."""
     h = (float(a[2]) + w * hue_delta(float(a[2]), float(b[2]))) % 360.0
     return np.array([(1 - w) * a[0] + w * b[0], (1 - w) * a[1] + w * b[1], h])
 
@@ -158,16 +158,16 @@ def _blend_lch(a: np.ndarray, b: np.ndarray, w: float) -> np.ndarray:
 def match_reference_family(
     family: Family, style: ReferenceStyle, dominant: bool = False, centroid: tuple[float, float] | None = None
 ) -> dict | None:
-    """Find the reference colour family with the same role as this source family.
+    """Find the reference color family with the same role as this source family.
 
     Same-hue matches come first (yellow->yellow, white->white). For a same-species reference a
-    secondary colour that has no hue match (Totodile's red stripe vs FRLG's yellow one) falls
+    secondary color that has no hue match (Totodile's red stripe vs FRLG's yellow one) falls
     back to the reference region sitting in the same *place* on the body.
     """
     best, best_score = None, 0.0
     top_weight = max((rf["weight"] for rf in style.families), default=0.0)
     if style.same_subject and dominant:
-        # Same species: the main body colour maps to the official main body colour whatever
+        # Same species: the main body color maps to the official main body color whatever
         # its hue (Yellow's near-white Pikachu -> FRLG yellow, green Bulbasaur -> teal).
         cands = [rf for rf in style.families if rf["weight"] >= top_weight - 1e-9]
         return max(cands, key=lambda rf: rf["pixels"]) if cands else None
@@ -179,7 +179,7 @@ def match_reference_family(
         if family.achromatic:
             if family.base.L > 60:
                 # Whites map to the reference's white if it has one, else to a warm cream/pale
-                # yellow region (Gen III bellies); never to a pale body colour such as Squirtle's blue.
+                # yellow region (Gen III bellies); never to a pale body color such as Squirtle's blue.
                 if rf["achromatic"] and ref_L >= 75 and share >= 0.008:
                     score = rank_score + 10.0 + share
                 elif ref_L >= 75 and ref_C <= 65 and 35.0 <= ref_h <= 110.0 and share >= 0.03:
@@ -188,7 +188,7 @@ def match_reference_family(
                     continue
             elif style.same_subject and ref_L <= 45 and share >= 0.03:
                 # Thick GBC black (Cyndaquil's back, Snorlax's body) takes the official dark
-                # body colour of the same species, whatever its hue.
+                # body color of the same species, whatever its hue.
                 score = rank_score + share + (5.0 if not rf["achromatic"] else 0.0)
             elif not (rf["achromatic"] and ref_L <= 60):
                 continue
@@ -226,12 +226,12 @@ def build_ramp(
     ref_family: dict | None = None,
     level_offset: int = 0,
 ) -> Ramp:
-    """Derive deep/shadow/base/light/highlight/line from a source colour in LCh space.
+    """Derive deep/shadow/base/light/highlight/line from a source color in LCh space.
 
     Existing source shades are kept where the family already has them; missing levels are
-    synthesised from the (blended) reference deltas. In reference-guided mode every level is
+    synthesized from the (blended) reference deltas. In reference-guided mode every level is
     then pulled toward the matched reference family by `reference_weight`. `level_offset`
-    shifts which reference level a source level maps to (a GBC "shading colour" family maps
+    shifts which reference level a source level maps to (a GBC "shading color" family maps
     onto the reference's shadow tones, not its base).
     """
     base = _lch(base_rgb)
@@ -245,14 +245,14 @@ def build_ramp(
 
     if ref_family is None and config.palette_mode == "reference-guided" and style.adopt_colors:
         ref_family = match_reference_family(family, style, dominant)
-    # A same-species reference is the authoritative palette ("switch out the colours"); a
-    # user-chosen reference pulls by reference_weight; auto-picked shape-alikes never recolour.
+    # A same-species reference is the authoritative palette ("switch out the colors"); a
+    # user-chosen reference pulls by reference_weight; auto-picked shape-alikes never recolor.
     w = (1.0 if style.same_subject else config.reference_weight) if ref_family else 0.0
     if config.kind == "trainer" and not family.achromatic:
         w *= 0.5  # skin/hair/clothing hues must stay closer to the source
 
     def ref_at(level: int) -> RGB | None:
-        """Reference colour for a level, falling back to the nearest level that exists."""
+        """Reference color for a level, falling back to the nearest level that exists."""
         if not ref_family:
             return None
         levels = ref_family["levels"]
@@ -299,7 +299,7 @@ def build_ramp(
         highlight = _rgb(np.array([float(lt[0]) + dl, float(lt[1]) * 0.8, float(lt[2])]))
     highlight = adapt(highlight, 2)
     dp = _lch(deep)
-    # Outline base: a dark shade of the local colour that still reads as a line against every
+    # Outline base: a dark shade of the local color that still reads as a line against every
     # body shade. Gen III keeps it fairly saturated (Charizard's outline is dark orange, not black).
     line_L = float(np.clip(min(float(dp[0]) - 12.0, 34.0), 14.0, 34.0))
     line = _rgb(np.array([line_L, min(float(dp[1]) * 1.1, 60.0), float(dp[2])]))
@@ -343,7 +343,7 @@ def build_palette(
     style = _blend_style(ref, config)
     ramps: list[Ramp] = []
     centroids = centroids or {}
-    # Trainers are frequently redesigned between generations; never re-hue their colours.
+    # Trainers are frequently redesigned between generations; never re-hue their colors.
     dominant = max(families, key=lambda f: f.pixel_count) if families and config.kind != "trainer" else None
     guided = config.palette_mode == "reference-guided" and style.adopt_colors
     dom_ref = match_reference_family(dominant, style, True) if (dominant and guided) else None
@@ -360,7 +360,7 @@ def build_palette(
                 style.same_subject and not is_dom and dominant is not None and dom_ref is not None
                 and not f.achromatic and ref_family is dom_ref
             ):
-                # A second family in the body's hue is the GBC shading colour (Yellow Pikachu's
+                # A second family in the body's hue is the GBC shading color (Yellow Pikachu's
                 # gold under near-white): map it onto the reference's darker/lighter levels.
                 if f.base.L < dominant.base.L - 8.0:
                     offset = -1
@@ -388,7 +388,7 @@ def build_palette(
 
 
 def enforce_color_limit(rgba: np.ndarray, max_opaque: int, protected: list[RGB]) -> tuple[np.ndarray, list[str]]:
-    """Merge the perceptually closest non-protected colour pairs until the limit is met."""
+    """Merge the perceptually closest non-protected color pairs until the limit is met."""
     warnings: list[str] = []
     out = rgba.copy()
     opaque = out[..., 3] > 0
@@ -405,17 +405,17 @@ def enforce_color_limit(rgba: np.ndarray, max_opaque: int, protected: list[RGB])
                 if i == j or prot[i]:
                     continue
                 d = float(np.linalg.norm(lab[i] - lab[j]))
-                # Prefer removing rare colours: weight distance by the removed colour's share.
+                # Prefer removing rare colors: weight distance by the removed color's share.
                 score = d * (0.5 + counts[i] / max(1, counts.sum()))
                 if best is None or score < best[0]:
                     best = (score, i, j)
         if best is None:
-            warnings.append("could not reduce palette without touching protected colours")
+            warnings.append("could not reduce palette without touching protected colors")
             break
         _, i, j = best
         mask = np.all(out[..., :3] == colors[i], axis=-1) & opaque
         out[mask, :3] = colors[j]
-        warnings.append(f"merged colour {tuple(int(v) for v in colors[i])} into {tuple(int(v) for v in colors[j])}")
+        warnings.append(f"merged color {tuple(int(v) for v in colors[i])} into {tuple(int(v) for v in colors[j])}")
     return out, warnings
 
 

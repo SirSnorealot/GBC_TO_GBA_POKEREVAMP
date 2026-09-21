@@ -42,7 +42,24 @@ def _game_from_stem(stem: str) -> tuple[str, str]:
     return "other", stem
 
 
-def list_references(kind: str | None = None, game: str | None = None, root: Path | None = None, era: str = "gba") -> list[ReferenceEntry]:
+def shiny_variant(path: Path) -> Path | None:
+    """Path of the shiny-palette sibling of a reference (or source) sprite, if it was generated."""
+    if path.stem.endswith("_shiny"):
+        return path
+    cand = path.with_name(path.stem + "_shiny.png")
+    return cand if cand.exists() else None
+
+
+def normal_variant(path: Path) -> Path:
+    if path.stem.endswith("_shiny"):
+        cand = path.with_name(path.stem[: -len("_shiny")] + ".png")
+        return cand if cand.exists() else path
+    return path
+
+
+def list_references(
+    kind: str | None = None, game: str | None = None, root: Path | None = None, era: str = "gba", include_shiny: bool = False
+) -> list[ReferenceEntry]:
     """List indexed sprites. era='gba' (Gen III references), 'gbc' (Gen I/II sources) or 'all'."""
     root = root or project_root()
     eras = ["gbc", "gba"] if era == "all" else [era]
@@ -57,6 +74,8 @@ def list_references(kind: str | None = None, game: str | None = None, root: Path
             if not d.exists():
                 continue
             for p in sorted(d.glob("*.png")):
+                if p.stem.endswith("_shiny") and not include_shiny:
+                    continue
                 g, name = _game_from_stem(p.stem)
                 if game and game != "gen3-mixed" and g != game:
                     continue
@@ -65,7 +84,7 @@ def list_references(kind: str | None = None, game: str | None = None, root: Path
 
 
 def extract_style(sprite: SpriteImage) -> ReferenceStyle:
-    """Measure relative shading behaviour from one Gen III sprite (never its literal colours)."""
+    """Measure relative shading behavior from one Gen III sprite (never its literal colors)."""
     infos = analyze_colors(sprite.rgba, sprite.opaque_mask)
     style = ReferenceStyle()
     style.reference_paths = [sprite.source_path] if sprite.source_path else []
@@ -83,14 +102,14 @@ def extract_style(sprite: SpriteImage) -> ReferenceStyle:
     idx, palette = index_map(sprite.rgba, sprite.opaque_mask)
     boundary = exterior_boundary(sprite.opaque_mask)
     n_boundary = max(1, int(boundary.sum()))
-    # Silhouette outline split: black-ish / dark body-colour "outline base" / lighter highlight.
+    # Silhouette outline split: black-ish / dark body-color "outline base" / lighter highlight.
     b_ids = idx[boundary]
     b_L = np.array([infos[i].L for i in b_ids])
     black = b_L <= outline.L + 12
     style.outline_black_fraction = float(np.clip(black.mean(), 0.1, 0.9))
     non_black = b_ids[~black]
     if len(non_black):
-        # The outline-base tone is the most common non-black edge colour; anything clearly
+        # The outline-base tone is the most common non-black edge color; anything clearly
         # lighter than it is an outline highlight.
         vals, counts = np.unique(non_black, return_counts=True)
         base_L = infos[int(vals[np.argmax(counts)])].L
@@ -110,7 +129,7 @@ def extract_style(sprite: SpriteImage) -> ReferenceStyle:
         by_level: dict[str, tuple[int, int, int]] = {}
         for rgb, lvl in sorted(f.levels.items(), key=lambda kv: -next(c.count for c in f.colors if c.rgb == kv[0])):
             by_level.setdefault(str(lvl), rgb)
-        # The family's darkest colour that actually runs along the silhouette is its outline base.
+        # The family's darkest color that actually runs along the silhouette is its outline base.
         line_candidates = [c for c in sorted(f.colors, key=lambda c: c.L) if boundary_share[infos.index(c)] >= 0.04 and c.L < f.base.L]
         member = np.isin(idx, [infos.index(c) for c in f.colors])
         ys, xs = np.nonzero(member)
@@ -130,7 +149,7 @@ def extract_style(sprite: SpriteImage) -> ReferenceStyle:
             "achromatic": f.achromatic,
             "weight": 1.0,
         })
-    # Lines cut the grid; fill them from the nearest coloured cell so lookups always hit a family.
+    # Lines cut the grid; fill them from the nearest colored cell so lookups always hit a family.
     if (grid >= 0).any():
         _, (giy, gix) = ndimage.distance_transform_edt(grid < 0, return_indices=True)
         grid = grid[giy, gix]
@@ -275,7 +294,7 @@ def canonical_name_from_path(path: Path) -> str:
     for prefix in GAME_PREFIXES:
         if stem.startswith(prefix):
             stem = stem[len(prefix) :]
-    for suffix in ("_revamped", "_front", "_crystal", "_gold", "_silver", "_yellow", "_rb", "_gbc", "_gb"):
+    for suffix in ("_shiny", "_revamped", "_front", "_crystal", "_gold", "_silver", "_yellow", "_rb", "_gbc", "_gb"):
         if stem.endswith(suffix):
             stem = stem[: -len(suffix)]
     return stem

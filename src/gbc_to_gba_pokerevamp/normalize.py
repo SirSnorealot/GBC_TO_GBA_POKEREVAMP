@@ -1,4 +1,4 @@
-"""Geometry normalisation onto the GBA battle-sprite canvas (nearest-neighbour / discrete only)."""
+"""Geometry normalization onto the GBA battle-sprite canvas (nearest-neighbour / discrete only)."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from gbc_to_gba_pokerevamp.models import ColorRole
 
 @dataclass
 class NormalizedSprite:
-    idx: np.ndarray  # (canvas, canvas) int32 colour indices, -1 = transparent
+    idx: np.ndarray  # (canvas, canvas) int32 color indices, -1 = transparent
     mask: np.ndarray  # (canvas, canvas) bool
     scale: float
     mode_used: str
@@ -22,7 +22,7 @@ class NormalizedSprite:
 
 
 def _nn_indices(n_src: int, n_dst: int) -> np.ndarray:
-    """Source index for each destination pixel using centre sampling; purely integer output."""
+    """Source index for each destination pixel using center sampling; purely integer output."""
     return np.minimum(((np.arange(n_dst) + 0.5) * n_src / n_dst).astype(np.int64), n_src - 1)
 
 

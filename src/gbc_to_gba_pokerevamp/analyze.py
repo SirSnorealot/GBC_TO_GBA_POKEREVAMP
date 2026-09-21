@@ -1,4 +1,4 @@
-"""Background detection, subject masks, and source colour-role analysis."""
+"""Background detection, subject masks, and source color-role analysis."""
 
 from __future__ import annotations
 
@@ -23,8 +23,8 @@ def _border_colors(rgb: np.ndarray) -> Counter:
 def detect_background(rgba: np.ndarray, indices: np.ndarray | None = None) -> tuple[np.ndarray, RGB | None, list[str]]:
     """Return (opaque_mask, background_color, warnings).
 
-    Alpha wins when present. Otherwise the most frequent border colour is flood-filled
-    from the canvas edges so same-coloured enclosed regions stay part of the subject.
+    Alpha wins when present. Otherwise the most frequent border color is flood-filled
+    from the canvas edges so same-colored enclosed regions stay part of the subject.
     """
     warnings: list[str] = []
     alpha = rgba[..., 3]
@@ -39,7 +39,7 @@ def detect_background(rgba: np.ndarray, indices: np.ndarray | None = None) -> tu
     bg_color, bg_count = counts.most_common(1)[0]
     share = bg_count / max(1, total_border)
     if share < 0.6:
-        warnings.append(f"ambiguous background: dominant border colour covers only {share:.0%} of the border")
+        warnings.append(f"ambiguous background: dominant border color covers only {share:.0%} of the border")
     # For paletted GBA-style images index 0 is conventionally transparent; use it as a tiebreaker.
     if indices is not None and share < 0.9:
         idx_border = np.concatenate([indices[0, :], indices[-1, :], indices[:, 0], indices[:, -1]])
@@ -56,9 +56,9 @@ def detect_background(rgba: np.ndarray, indices: np.ndarray | None = None) -> tu
     edge_labels = edge_labels[edge_labels != 0]
     background = np.isin(labels, edge_labels)
     opaque = ~background
-    # Gen I sprites use the lightest colour for both the background and the body fill, and
+    # Gen I sprites use the lightest color for both the background and the body fill, and
     # their outlines have 1px gaps through which that fill "leaks" out. A background region
-    # reachable only through such a gap, and bordered mostly by body colours rather than by
+    # reachable only through such a gap, and bordered mostly by body colors rather than by
     # outline, is body fill. Wider openings (between a tail and the body) are left alone.
     closed = ndimage.binary_closing(np.pad(opaque, 2), structure=FOUR, iterations=1)[2:-2, 2:-2]
     candidates = ndimage.binary_fill_holes(closed) & background
@@ -81,11 +81,11 @@ def detect_background(rgba: np.ndarray, indices: np.ndarray | None = None) -> tu
                 sealed |= comp
     if sealed.any():
         opaque |= sealed
-        warnings.append(f"{int(sealed.sum())} background-coloured pixels inside outline gaps were kept as subject")
+        warnings.append(f"{int(sealed.sum())} background-colored pixels inside outline gaps were kept as subject")
     enclosed = same & opaque & ~sealed
     if enclosed.any():
         warnings.append(
-            f"{int(enclosed.sum())} interior pixels share the background colour and were kept as subject"
+            f"{int(enclosed.sum())} interior pixels share the background color and were kept as subject"
         )
     return opaque, bg_color, warnings  # type: ignore[return-value]
 
@@ -98,7 +98,7 @@ def exterior_boundary(mask: np.ndarray) -> np.ndarray:
 
 
 def index_map(rgba: np.ndarray, opaque: np.ndarray) -> tuple[np.ndarray, list[RGB]]:
-    """Map every opaque pixel to an index into a deterministic colour list; background is -1."""
+    """Map every opaque pixel to an index into a deterministic color list; background is -1."""
     colors = np.unique(rgba[opaque][:, :3], axis=0)
     palette: list[RGB] = [tuple(int(v) for v in c) for c in colors]  # type: ignore[misc]
     key = rgba[..., 0].astype(np.int64) * 65536 + rgba[..., 1].astype(np.int64) * 256 + rgba[..., 2].astype(np.int64)
@@ -112,7 +112,7 @@ def index_map(rgba: np.ndarray, opaque: np.ndarray) -> tuple[np.ndarray, list[RG
 
 
 def analyze_colors(rgba: np.ndarray, opaque: np.ndarray) -> list[ColorInfo]:
-    """Compute per-colour statistics and assign tentative roles."""
+    """Compute per-color statistics and assign tentative roles."""
     idx, palette = index_map(rgba, opaque)
     boundary = exterior_boundary(opaque)
     n_opaque = int(opaque.sum())
@@ -152,9 +152,9 @@ def assign_roles(infos: list[ColorInfo]) -> None:
     if not infos:
         return
     by_L = sorted(infos, key=lambda c: c.L)
-    # Outline: the darkest colour that owns a meaningful share of the exterior boundary.
-    # Gen III sprites also run coloured outlines along lit edges, so "most boundary" is wrong;
-    # "darkest with real boundary presence" is what artists treat as the outline colour.
+    # Outline: the darkest color that owns a meaningful share of the exterior boundary.
+    # Gen III sprites also run colored outlines along lit edges, so "most boundary" is wrong;
+    # "darkest with real boundary presence" is what artists treat as the outline color.
     outline = None
     candidates = [c for c in by_L if c.L < 45 and c.boundary_share >= 0.1]
     if candidates:
@@ -164,7 +164,7 @@ def assign_roles(infos: list[ColorInfo]) -> None:
     if outline is not None:
         outline.role = ColorRole.OUTLINE
     rest = [c for c in by_L if c is not outline]
-    # Very dark, low-frequency colours that are not the outline are internal linework.
+    # Very dark, low-frequency colors that are not the outline are internal linework.
     for c in list(rest):
         if outline is not None and c.L < 25 and c.frequency < 0.08:
             c.role = ColorRole.INTERNAL_LINE
@@ -209,11 +209,11 @@ def connected_component_count(mask: np.ndarray) -> int:
 
 
 def checker_dither(idx: np.ndarray) -> list[tuple[np.ndarray, int, int]]:
-    """Find GBC-style checkerboard dithering between two colours.
+    """Find GBC-style checkerboard dithering between two colors.
 
-    Returns (component mask, colour a, colour b) for each dithered patch of >= 4 pixels.
-    A pixel is dithered when 3+ of its 4-neighbours share one other colour and 2+ diagonal
-    neighbours share its own colour; a relaxed second pass grows patches by one pixel.
+    Returns (component mask, color a, color b) for each dithered patch of >= 4 pixels.
+    A pixel is dithered when 3+ of its 4-neighbours share one other color and 2+ diagonal
+    neighbours share its own color; a relaxed second pass grows patches by one pixel.
     """
     h, w = idx.shape
     p = np.pad(idx, 1, constant_values=-1)

@@ -67,7 +67,7 @@ def illumination(region: np.ndarray, mask: np.ndarray, light: tuple[float, float
     lx, ly = light
     ln = np.hypot(lx, ly) + 1e-9
     lx, ly = lx / ln, ly / ln
-    k = 0.12  # how much the flat centre of the form reads as lit
+    k = 0.12  # how much the flat center of the form reads as lit
     nz = np.sqrt(gx * gx + gy * gy + k * k)
     lit = (-gx / nz) * lx + (-gy / nz) * ly + (k / nz) * 0.6
     ys = np.nonzero(filled)[0]
@@ -132,7 +132,7 @@ def _color_key(rgba: np.ndarray) -> np.ndarray:
 
 
 def remove_isolated_pixels(rgba: np.ndarray, protected: np.ndarray, keep: np.ndarray, strength: float) -> tuple[np.ndarray, int]:
-    """Replace opaque pixels that share their colour with no 8-neighbour by their dominant neighbour.
+    """Replace opaque pixels that share their color with no 8-neighbour by their dominant neighbour.
 
     `protected` pixels (accents) and `keep` pixels (exterior outline) are never modified.
     At strength >= 0.75, two-pixel islands are treated the same way.
@@ -146,7 +146,7 @@ def remove_isolated_pixels(rgba: np.ndarray, protected: np.ndarray, keep: np.nda
         key = _color_key(out)
         opaque = key >= 0
         labels = np.zeros(key.shape, dtype=np.int64)
-        # Label same-colour components by processing each colour separately.
+        # Label same-color components by processing each color separately.
         next_label = 1
         for k in np.unique(key[opaque]):
             lab, n = ndimage.label(key == k, structure=EIGHT)

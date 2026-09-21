@@ -1,8 +1,8 @@
 """PokeRevamp Assistant — the interactive editor.
 
 The automatic pass is only a starting point. Everything it produces can be steered
-(reference, effects, sliders, per-colour mapping) and then finished by hand: paint single
-pixels or whole regions on the original *or* on the result with any colour from the Gen III
+(reference, effects, sliders, per-color mapping) and then finished by hand: paint single
+pixels or whole regions on the original *or* on the result with any color from the Gen III
 reference, and watch the preview update live.
 """
 
@@ -23,7 +23,7 @@ from gbc_to_gba_pokerevamp.colorspace import rgb_to_lch
 from gbc_to_gba_pokerevamp.config import RevampConfig
 from gbc_to_gba_pokerevamp.models import RGB, SpriteImage
 from gbc_to_gba_pokerevamp.paths import project_root
-from gbc_to_gba_pokerevamp.references import canonical_name_from_path, list_references
+from gbc_to_gba_pokerevamp.references import canonical_name_from_path, list_references, normal_variant, shiny_variant
 from gbc_to_gba_pokerevamp.render import compare_sheet
 from gbc_to_gba_pokerevamp.revamp import RevampError, RevampOutcome, infer_kind, revamp_sprite, rgba_to_image
 from gbc_to_gba_pokerevamp.sprite_io import SpriteLoadError, load_sprite, save_rgba_png
@@ -31,7 +31,7 @@ from gbc_to_gba_pokerevamp.sprite_io import SpriteLoadError, load_sprite, save_r
 CANVAS = 64
 STAGES = [
     ("Final result", "09_final"),
-    ("Recoloured (flat)", "05_recolored"),
+    ("Recolored (flat)", "05_recolored"),
     ("Outlined", "06_outlined"),
     ("Shaded", "07_shaded"),
     ("Cleaned", "08_cleaned"),
@@ -49,10 +49,10 @@ SLIDERS = [
     ("Light Y", "light_y", -1.0, 1.0),
 ]
 EFFECTS = [
-    ("Recolour to reference layout", "recolor"),
+    ("Recolor to reference layout", "recolor"),
     ("Rebuild outline", "rebuild_outline"),
     ("Add shading", "shade"),
-    ("Limit to 15 colours", "enforce_palette"),
+    ("Limit to 15 colors", "enforce_palette"),
     ("Treat reference as same Pokémon", "force_same_subject"),
 ]
 
@@ -67,7 +67,8 @@ THEMES = {
     },
 }
 
-Edit = dict[tuple[int, int], RGB | None]  # pixel -> colour, None = transparent
+Edit = dict[tuple[int, int], RGB | None]  # pixel -> color, None = transparent
+PICK_ONLY = {"reference", "shiny_result", "shiny_reference"}  # panels you can pick colors from but not paint on
 
 
 def _hex(rgb: RGB) -> str:
@@ -128,7 +129,7 @@ def apply_result_edits(final: np.ndarray, edits: Edit) -> np.ndarray:
 
 
 def flood_region(rgba: np.ndarray, x: int, y: int) -> np.ndarray:
-    """4-connected region of identical colour (or of transparency) containing (x, y)."""
+    """4-connected region of identical color (or of transparency) containing (x, y)."""
     same = np.all(rgba == rgba[y, x], axis=-1)
     labels, _ = ndimage.label(same, structure=np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]], bool))
     return labels == labels[y, x]
@@ -145,10 +146,12 @@ class RevampApp(tk.Tk):
         self.input_path: Path | None = None
         self.config_model = RevampConfig()
         self.outcome: RevampOutcome | None = None
+        self.shiny_outcome: RevampOutcome | None = None
         self.display_final: np.ndarray | None = None
         self.edited_source: np.ndarray | None = None
         self.reference_mode = tk.StringVar(value="auto")
         self.reference_path: Path | None = None
+        self.shiny = tk.BooleanVar(value=False)
         self.zoom = tk.IntVar(value=6)
         self.fit_zoom = tk.BooleanVar(value=True)
         self.bg_mode = tk.StringVar(value="dark")
@@ -298,7 +301,7 @@ class RevampApp(tk.Tk):
         # Reference
         f = ttk.LabelFrame(left, text="Gen III reference", padding=6)
         f.pack(fill="x", pady=(0, 6))
-        for text, val in (("Auto (same species, else shape-alikes)", "auto"), ("None (keep source colours)", "none"), ("Pick from list:", "pick")):
+        for text, val in (("Auto (same species, else shape-alikes)", "auto"), ("None (keep source colors)", "none"), ("Pick from list:", "pick")):
             ttk.Radiobutton(f, text=text, value=val, variable=self.reference_mode, command=self.schedule).pack(anchor="w")
         row = ttk.Frame(f)
         row.pack(fill="x")
@@ -310,6 +313,8 @@ class RevampApp(tk.Tk):
         self.ref_list = self._reg(tk.Listbox(f, height=5, exportselection=False, relief="flat"), "list")
         self.ref_list.pack(fill="x", pady=(4, 0))
         self.ref_list.bind("<<ListboxSelect>>", self._on_ref_selected)
+        self.shiny_check = ttk.Checkbutton(f, text="Also show the shiny version (second preview row)", variable=self.shiny, command=self.schedule)
+        self.shiny_check.pack(anchor="w", pady=(4, 0))
         self.ref_label = ttk.Label(f, text="", style="Muted.TLabel")
         self.ref_label.pack(anchor="w")
 
@@ -319,7 +324,7 @@ class RevampApp(tk.Tk):
         tools = ttk.Frame(f)
         tools.pack(fill="x")
         self.tool_buttons: dict[str, ttk.Button] = {}
-        for text, val in (("Pick colour", "pick"), ("Pencil", "pencil"), ("Fill region", "fill")):
+        for text, val in (("Pick color", "pick"), ("Pencil", "pencil"), ("Fill region", "fill")):
             b = ttk.Button(tools, text=text, style="Tool.TButton", command=lambda v=val: self.set_tool(v))
             b.pack(side="left", padx=(0, 3))
             self.tool_buttons[val] = b
@@ -333,10 +338,10 @@ class RevampApp(tk.Tk):
         self.brush_label.pack(side="left")
         ttk.Button(brow, text="Transparent", style="Tool.TButton", command=lambda: self.set_brush(None)).pack(side="right")
         ttk.Button(brow, text="Custom…", style="Tool.TButton", command=self.custom_brush).pack(side="right", padx=3)
-        ttk.Label(f, text="Reference colours (one row per region, dark → light):", style="Muted.TLabel").pack(anchor="w", pady=(6, 0))
+        ttk.Label(f, text="Reference colors (one row per region, dark → light):", style="Muted.TLabel").pack(anchor="w", pady=(6, 0))
         self.palette_frame = ttk.Frame(f)
         self.palette_frame.pack(fill="x")
-        ttk.Label(f, text="Source colours:", style="Muted.TLabel").pack(anchor="w", pady=(4, 0))
+        ttk.Label(f, text="Source colors:", style="Muted.TLabel").pack(anchor="w", pady=(4, 0))
         self.src_palette_frame = ttk.Frame(f)
         self.src_palette_frame.pack(fill="x")
         erow = ttk.Frame(f)
@@ -347,8 +352,8 @@ class RevampApp(tk.Tk):
         ttk.Button(erow, text="Clear source edits", style="Tool.TButton", command=lambda: self.clear_edits("source")).pack(side="right", padx=3)
         ttk.Label(f, text="Right-click a painted pixel to erase that edit. Pixels you paint on the Source are kept exactly as painted.", style="Muted.TLabel", wraplength=340).pack(anchor="w", pady=(4, 0))
 
-        # Colour map
-        f = ttk.LabelFrame(left, text="Colour mapping  (whole source colour → target)", padding=6)
+        # Color map
+        f = ttk.LabelFrame(left, text="Color mapping  (whole source color → target)", padding=6)
         f.pack(fill="x", pady=(0, 6))
         self.colors_body = ttk.Frame(f)
         self.colors_body.pack(fill="x")
@@ -437,8 +442,31 @@ class RevampApp(tk.Tk):
             cfg = cfg.model_copy(update={"auto_reference": False, "palette_mode": "source-expanded"})
         return cfg
 
+    def _base_ref(self) -> Path | None:
+        """The reference the run is based on: the picked one, or the same-species one in Auto."""
+        mode = self.reference_mode.get()
+        if mode == "pick" and self.reference_path:
+            return normal_variant(self.reference_path)
+        if mode == "auto" and self.input_path is not None:
+            name = canonical_name_from_path(self.input_path)
+            cands = [e for e in list_references(kind=self.kind_var.get(), era="gba") if e.name == name and e.matches_style(self.style_var.get())]
+            if cands:
+                return cands[0].path
+        return None
+
     def _refs(self) -> list[Path]:
-        return [self.reference_path] if self.reference_mode.get() == "pick" and self.reference_path else []
+        """Explicit reference list for the normal run (empty lets the pipeline rank shape-alikes)."""
+        if self.reference_mode.get() == "pick" and self.reference_path:
+            return [normal_variant(self.reference_path)]
+        return []
+
+    def _shiny_refs(self) -> list[Path]:
+        """Shiny sibling of the base reference, when the toggle is on and one exists."""
+        if not self.shiny.get() or self.reference_mode.get() == "none":
+            return []
+        base = self._base_ref()
+        shiny = shiny_variant(base) if base is not None else None
+        return [shiny] if shiny is not None else []
 
     def reset_tuning(self) -> None:
         d = RevampConfig()
@@ -541,6 +569,7 @@ class RevampApp(tk.Tk):
         self.status.configure(text="working…")
         config = self.current_config()
         refs = self._refs()
+        shiny_refs = self._shiny_refs()
         path = self.input_path
         edits = dict(self.source_edits)
 
@@ -551,7 +580,12 @@ class RevampApp(tk.Tk):
                 edited = sprite.rgba.copy()
                 pinned = {pos: rgb for pos, rgb in edits.items() if rgb is not None}
                 outcome = revamp_sprite(sprite, config, refs, input_name=str(path), pinned_pixels=pinned)
-                self._results.put(("outcome", (outcome, edited)))
+                shiny_outcome = None
+                if shiny_refs:
+                    sprite2 = load_sprite(path, kind=config.kind)  # type: ignore[arg-type]
+                    apply_source_edits(sprite2, edits)
+                    shiny_outcome = revamp_sprite(sprite2, config, shiny_refs, input_name=str(path), pinned_pixels=pinned)
+                self._results.put(("outcome", (outcome, edited, shiny_outcome)))
             except (SpriteLoadError, RevampError, ValueError, IndexError) as exc:  # shown in the log, never crash the UI
                 self._results.put(("error", str(exc)))
 
@@ -579,14 +613,18 @@ class RevampApp(tk.Tk):
             pass
         self.after(50, self._poll)
 
-    def _finished(self, outcome: RevampOutcome, edited_source: np.ndarray) -> None:
+    def _finished(self, outcome: RevampOutcome, edited_source: np.ndarray, shiny_outcome: RevampOutcome | None = None) -> None:
         self._running = False
         self.outcome = outcome
+        self.shiny_outcome = shiny_outcome
         self.edited_source = edited_source
         self.display_final = apply_result_edits(outcome.final, self.result_edits)
         rep = outcome.report
-        self.status.configure(text=f"{rep.source_opaque_colors} → {rep.target_opaque_colors} colours")
-        self._log("\n".join(outcome.warnings) if outcome.warnings else "(no warnings)")
+        self.status.configure(text=f"{rep.source_opaque_colors} → {rep.target_opaque_colors} colors" + ("  + shiny" if shiny_outcome else ""))
+        warn = list(outcome.warnings)
+        if self.shiny.get() and shiny_outcome is None and self.reference_mode.get() != "none":
+            warn.append("no shiny palette available for this reference")
+        self._log("\n".join(warn) if warn else "(no warnings)")
         self._rebuild_color_rows()
         self._rebuild_palettes()
         self.redraw()
@@ -598,22 +636,36 @@ class RevampApp(tk.Tk):
         self.log.configure(state="disabled")
 
     # ------------------------------------------------------------------ preview
-    def _panel_images(self) -> list[tuple[str, Image.Image, str]]:
+    def _panel_rows(self) -> list[list[tuple[str, Image.Image, str]]]:
+        """Rows of (panel id, image, label). Row 2 is the shiny preview when available."""
         assert self.outcome is not None
         src = self.edited_source if self.edited_source is not None else self.outcome.sprite.rgba
-        panels: list[tuple[str, Image.Image, str]] = [("source", Image.fromarray(np.ascontiguousarray(src), "RGBA"), "Source (paintable)")]
+        row1: list[tuple[str, Image.Image, str]] = [("source", Image.fromarray(np.ascontiguousarray(src), "RGBA"), "Source (paintable)")]
         stage_key = dict(STAGES).get(self.stage_name.get(), "09_final")
         if stage_key == "09_final" and self.display_final is not None:
             result = self.display_final
         else:
             result = self.outcome.stages.get(stage_key, self.outcome.final)
-        panels.append(("result", Image.fromarray(np.ascontiguousarray(result), "RGBA"), f"{self.stage_name.get()} (paintable)"))
+        row1.append(("result", Image.fromarray(np.ascontiguousarray(result), "RGBA"), f"{self.stage_name.get()} (paintable)"))
         if self.outcome.used_refs:
             try:
-                panels.append(("reference", load_sprite(self.outcome.used_refs[0]).image, f"Reference: {self.outcome.used_refs[0].stem}"))
+                row1.append(("reference", load_sprite(self.outcome.used_refs[0]).image, f"Reference: {self.outcome.used_refs[0].stem}"))
             except SpriteLoadError:
                 pass
-        return panels
+        rows = [row1]
+        if self.shiny_outcome is not None:
+            so = self.shiny_outcome
+            shiny_result = so.stages.get(stage_key, so.final)
+            row2: list[tuple[str, Image.Image, str]] = [
+                ("shiny_result", Image.fromarray(np.ascontiguousarray(shiny_result), "RGBA"), "Shiny result (pick only)"),
+            ]
+            if so.used_refs:
+                try:
+                    row2.append(("shiny_reference", load_sprite(so.used_refs[0]).image, f"Shiny reference: {so.used_refs[0].stem}"))
+                except SpriteLoadError:
+                    pass
+            rows.append(row2)
+        return rows
 
     def redraw(self) -> None:
         if not hasattr(self, "preview"):
@@ -622,19 +674,21 @@ class RevampApp(tk.Tk):
         self._panel_boxes = []
         if self.outcome is None:
             return
-        panels = self._panel_images()
+        rows = self._panel_rows()
+        ncols = max(len(r) for r in rows)
         pad = 12
+        label_h = 18
         z = max(1, int(self.zoom.get()))
         if self.fit_zoom.get():
             avail_w = max(100, self.preview.winfo_width())
             avail_h = max(100, self.preview.winfo_height())
-            z = max(1, min((avail_w - pad * (len(panels) + 1)) // (CANVAS * len(panels)), (avail_h - pad * 2 - 18) // CANVAS))
+            z = max(1, min((avail_w - pad * (ncols + 1)) // (CANVAS * ncols), (avail_h - (pad + label_h) * len(rows) - pad) // (CANVAS * len(rows))))
             if int(self.zoom.get()) != z:
                 self.zoom.set(z)
         cw = CANVAS * z
-        total_w = len(panels) * (cw + pad) + pad
-        total_h = cw + pad * 2 + 18
-        t = THEMES[self.theme_name.get()]
+        row_h = cw + pad + label_h
+        total_w = ncols * (cw + pad) + pad
+        total_h = len(rows) * row_h + pad
         mode = self.bg_mode.get()
         if mode == "checker":
             yy, xx = np.mgrid[0:total_h, 0:total_w]
@@ -645,17 +699,20 @@ class RevampApp(tk.Tk):
             sheet = Image.new("RGBA", (total_w, total_h), (40, 40, 46, 255) if mode == "dark" else (236, 236, 236, 255))
         draw = ImageDraw.Draw(sheet)
         text_fill = (230, 230, 230) if (mode == "dark" or (mode == "checker" and self.theme_name.get() == "dark")) else (20, 20, 20)
-        x = pad
-        for which, img, label in panels:
-            canvas_img = Image.new("RGBA", (CANVAS, CANVAS), (0, 0, 0, 0))
-            ox, oy = (CANVAS - img.width) // 2, (CANVAS - img.height) // 2
-            canvas_img.paste(img, (ox, oy), img)
-            big = canvas_img.resize((cw, cw), Image.Resampling.NEAREST)
-            sheet.alpha_composite(big, (x, pad + 18))
-            draw.rectangle([x - 1, pad + 17, x + cw, pad + 18 + cw], outline=(90, 90, 96))
-            draw.text((x, pad), label, fill=text_fill)
-            self._panel_boxes.append((which, x, pad + 18, z, ox, oy, img.width, img.height))
-            x += cw + pad
+        for r, panels in enumerate(rows):
+            y_top = pad + r * row_h
+            # The shiny row lines up under the Result column.
+            x = pad + (cw + pad) if (r == 1 and ncols >= 3) else pad
+            for which, img, label in panels:
+                canvas_img = Image.new("RGBA", (CANVAS, CANVAS), (0, 0, 0, 0))
+                ox, oy = (CANVAS - img.width) // 2, (CANVAS - img.height) // 2
+                canvas_img.paste(img, (ox, oy), img)
+                big = canvas_img.resize((cw, cw), Image.Resampling.NEAREST)
+                sheet.alpha_composite(big, (x, y_top + label_h))
+                draw.rectangle([x - 1, y_top + label_h - 1, x + cw, y_top + label_h + cw], outline=(90, 90, 96))
+                draw.text((x, y_top), label, fill=text_fill)
+                self._panel_boxes.append((which, x, y_top + label_h, z, ox, oy, img.width, img.height))
+                x += cw + pad
         self._photo = ImageTk.PhotoImage(sheet)
         self.preview.create_image(0, 0, anchor="nw", image=self._photo)
         self.preview.configure(scrollregion=(0, 0, total_w, total_h))
@@ -679,6 +736,10 @@ class RevampApp(tk.Tk):
             return self.display_final if self.display_final is not None else self.outcome.final
         if which == "reference" and self.outcome.used_refs:
             return load_sprite(self.outcome.used_refs[0]).rgba
+        if which == "shiny_result" and self.shiny_outcome is not None:
+            return self.shiny_outcome.final
+        if which == "shiny_reference" and self.shiny_outcome is not None and self.shiny_outcome.used_refs:
+            return load_sprite(self.shiny_outcome.used_refs[0]).rgba
         return None
 
     def _on_motion(self, event: tk.Event) -> None:
@@ -699,7 +760,7 @@ class RevampApp(tk.Tk):
             return
         which, px, py = hit
         tool = self.tool.get()
-        if which == "reference" or tool == "pick":
+        if which in PICK_ONLY or tool == "pick":
             arr = self._panel_array(which)
             if arr is not None and arr[py, px, 3]:
                 self.set_brush(tuple(int(v) for v in arr[py, px, :3]))  # type: ignore[arg-type]
@@ -726,7 +787,7 @@ class RevampApp(tk.Tk):
         if hit is None:
             return
         which, px, py = hit
-        if which == "reference":
+        if which in PICK_ONLY:
             return
         if (which, px, py) in self._drag_painted:
             return
@@ -745,7 +806,7 @@ class RevampApp(tk.Tk):
 
     def _on_right_click(self, event: tk.Event) -> None:
         hit = self._hit(event.x, event.y)
-        if hit is None or hit[0] == "reference":
+        if hit is None or hit[0] in PICK_ONLY:
             return
         which, px, py = hit
         edits = self.source_edits if which == "source" else self.result_edits
@@ -760,16 +821,16 @@ class RevampApp(tk.Tk):
         if self.outcome is None:
             return
         edits = self.source_edits if which == "source" else self.result_edits
-        colour = None if self.brush_is_transparent else self.brush
+        color = None if self.brush_is_transparent else self.brush
         arr = self._panel_array(which)
         for x, y in pixels:
             if which == "source" and arr is not None:
                 # Painting the background transparent on the source is a no-op.
-                if colour is None and not arr[y, x, 3]:
+                if color is None and not arr[y, x, 3]:
                     continue
             had = (x, y) in edits
             self._record(which, (x, y), edits.get((x, y)), had)
-            edits[(x, y)] = colour
+            edits[(x, y)] = color
         self._after_edit(which)
 
     def _after_edit(self, which: str) -> None:
@@ -821,7 +882,7 @@ class RevampApp(tk.Tk):
         self._update_brush_ui()
 
     def custom_brush(self) -> None:
-        rgb, _ = colorchooser.askcolor(parent=self, title="Brush colour", initialcolor=_hex(self.brush) if self.brush else None)
+        rgb, _ = colorchooser.askcolor(parent=self, title="Brush color", initialcolor=_hex(self.brush) if self.brush else None)
         if rgb:
             self.set_brush(tuple(int(round(v)) for v in rgb))  # type: ignore[arg-type]
 
@@ -870,7 +931,7 @@ class RevampApp(tk.Tk):
             for c, rgb in enumerate(sorted(self.outcome.report.target_palette, key=_lightness)):
                 self._swatch_button(self.src_palette_frame, tuple(rgb)).grid(row=2, column=c, padx=1, pady=1)  # type: ignore[arg-type]
 
-    # ------------------------------------------------------------------ colour mapping rows
+    # ------------------------------------------------------------------ color mapping rows
     def _rebuild_color_rows(self) -> None:
         for child in self.colors_body.winfo_children():
             child.destroy()
@@ -958,7 +1019,7 @@ class RevampApp(tk.Tk):
             ttk.Button(opts, text=text, style="Tool.TButton", command=lambda v=val: (self._set_override(key, v), top.destroy())).pack(side="left", padx=2)
         ttk.Button(opts, text="Custom…", style="Tool.TButton", command=lambda: self._pick_custom_map(key, top)).pack(side="left", padx=2)
         if self.outcome is not None and self.outcome.style.families:
-            ttk.Label(frm, text="Reference colours (one row per region, dark → light):", style="Muted.TLabel").pack(anchor="w")
+            ttk.Label(frm, text="Reference colors (one row per region, dark → light):", style="Muted.TLabel").pack(anchor="w")
             grid = ttk.Frame(frm)
             grid.pack()
             fams = sorted(self.outcome.style.families, key=lambda rf: -rf["pixels"])
@@ -969,10 +1030,10 @@ class RevampApp(tk.Tk):
                 for cidx, (lvl, rgb) in enumerate(lv):
                     self._swatch_button(grid, rgb, str(lvl), command=lambda v=rgb: (self._set_override(key, _key(v)), top.destroy())).grid(row=r, column=cidx + 1, padx=1, pady=1)  # type: ignore[arg-type]
         else:
-            ttk.Label(frm, text="No reference loaded — use Custom… to choose a colour.", style="Muted.TLabel").pack(anchor="w")
+            ttk.Label(frm, text="No reference loaded — use Custom… to choose a color.", style="Muted.TLabel").pack(anchor="w")
 
     def _pick_custom_map(self, key: str, parent: tk.Toplevel) -> None:
-        rgb, _ = colorchooser.askcolor(parent=parent, title="Target colour")
+        rgb, _ = colorchooser.askcolor(parent=parent, title="Target color")
         if rgb:
             self._set_override(key, _key(tuple(int(round(v)) for v in rgb)))  # type: ignore[arg-type]
             parent.destroy()
@@ -991,6 +1052,12 @@ class RevampApp(tk.Tk):
             if self.outcome.used_refs:
                 images.append(load_sprite(self.outcome.used_refs[0]).image)
                 labels.append(f"reference: {self.outcome.used_refs[0].name}")
+            saved = "revamped.png  compare.png  report.json  session.json"
+            if self.shiny_outcome is not None:
+                save_rgba_png(self.shiny_outcome.final, run_dir / "revamped_shiny.png")
+                images.append(rgba_to_image(self.shiny_outcome.final))
+                labels.append("shiny revamp")
+                saved += "  revamped_shiny.png"
             compare_sheet(images, labels, scale=4).save(run_dir / "compare.png", format="PNG")
             rep = self.outcome.report
             rep.output = str(run_dir / "revamped.png")
@@ -999,7 +1066,7 @@ class RevampApp(tk.Tk):
         except (OSError, SpriteLoadError) as exc:
             messagebox.showerror("Save failed", str(exc))
             return
-        self._log(f"saved to {run_dir}\n  revamped.png  compare.png  report.json  session.json")
+        self._log(f"saved to {run_dir}\n  {saved}")
         self.status.configure(text="saved")
 
     def _session_data(self) -> dict:
@@ -1007,6 +1074,7 @@ class RevampApp(tk.Tk):
         data["_input_path"] = str(self.input_path) if self.input_path else None
         data["_reference_mode"] = self.reference_mode.get()
         data["_reference_path"] = str(self.reference_path) if self.reference_path else None
+        data["_shiny"] = bool(self.shiny.get())
         data["_source_edits"] = {f"{x},{y}": (list(v) if v is not None else None) for (x, y), v in self.source_edits.items()}
         data["_result_edits"] = {f"{x},{y}": (list(v) if v is not None else None) for (x, y), v in self.result_edits.items()}
         data["_theme"] = self.theme_name.get()
@@ -1045,6 +1113,7 @@ class RevampApp(tk.Tk):
         ref = meta.get("_reference_path")
         self.reference_path = Path(ref) if ref else None
         self.ref_label.configure(text=self.reference_path.name if self.reference_path else "")
+        self.shiny.set(bool(meta.get("_shiny", False)))
 
         def _edits(d: dict) -> Edit:
             out: Edit = {}

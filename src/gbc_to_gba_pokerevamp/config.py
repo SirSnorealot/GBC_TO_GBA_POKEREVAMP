@@ -20,7 +20,7 @@ class RevampConfig(BaseModel):
     canvas_size: int = 64
     max_colors: int = 16  # including transparency -> 15 opaque
     preserve_pose: bool = True
-    # "none" keeps the source pixel size and only centres it on the canvas (Gen III sprites are
+    # "none" keeps the source pixel size and only centers it on the canvas (Gen III sprites are
     # redrawn larger, but enlarging pixel art by a fraction only produces uneven blocks).
     geometry_mode: GeometryMode = "none"
     palette_mode: PaletteMode = "reference-guided"
@@ -48,12 +48,12 @@ class RevampConfig(BaseModel):
     compare: bool = True  # write a source | revamp | reference sheet next to every result
     seed: int = 0
     # Effect toggles (the GUI exposes these; all on by default).
-    recolor: bool = True  # same-species positional recolour
+    recolor: bool = True  # same-species positional recolor
     force_same_subject: bool = False  # treat an explicitly chosen reference as the same Pokémon
     rebuild_outline: bool = True
     shade: bool = True
     enforce_palette: bool = True
-    # Manual colour mapping: source "r,g,b" -> target "r,g,b" (a reference/any colour),
+    # Manual color mapping: source "r,g,b" -> target "r,g,b" (a reference/any color),
     # or one of "auto", "keep", "outline", "transparent".
     color_map: dict[str, str] = Field(default_factory=dict)
 

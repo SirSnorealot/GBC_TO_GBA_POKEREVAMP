@@ -1,6 +1,6 @@
 """Form-following shade synthesis.
 
-Each connected sub-form of a colour region (head, arm, tail...) is shaded on its own like a
+Each connected sub-form of a color region (head, arm, tail...) is shaded on its own like a
 hand-drawn Gen III sprite: a smooth illumination field over the sub-form is thresholded so the
 share of shadow / deep / light / highlight pixels matches what the reference does, then the
 result is cleaned into deliberate 2px-wide-or-better clusters.
@@ -55,7 +55,7 @@ def _shade_subform(
 
     want_shadow = style.shadow_fraction * s
     # Rule 1 of revamping: keep the source shading only where it matches the target style.
-    # Gen I/II artists often flooded a sprite with its one dark colour; if the source has far
+    # Gen I/II artists often flooded a sprite with its one dark color; if the source has far
     # more shadow than the reference would, the most-lit shadow pixels revert to base. Deep
     # (-2) pixels are deliberate dark masses and are never demoted.
     src_shadow = sub & (out == -1)

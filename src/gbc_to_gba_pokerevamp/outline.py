@@ -2,8 +2,8 @@
 
 Rules implemented (from the classic revamping guides):
 * never keep the source outlining as-is; rebuild it and keep it one pixel wide,
-* most of the outline is a dark shade of the local colour ("outline base"), pure black only
-  where the form is in shadow, where different colours meet in shadow, and for solid blobs
+* most of the outline is a dark shade of the local color ("outline base"), pure black only
+  where the form is in shadow, where different colors meet in shadow, and for solid blobs
   such as pupils and claws,
 * the most lit edges take an even lighter "outline highlight" shade,
 * no lighter pixels *outside* the outline (they become dots on dark backgrounds).
@@ -22,7 +22,7 @@ from gbc_to_gba_pokerevamp.geometry import dilate, erode, illumination, small_co
 from gbc_to_gba_pokerevamp.models import ReferenceStyle
 
 LINE_NONE = 0
-LINE_BLACK = 1  # darkest palette colour
+LINE_BLACK = 1  # darkest palette color
 LINE_BASE = 2  # family outline-base shade (ramp.line)
 LINE_HIGHLIGHT = 3  # family outline-highlight shade (ramp.deep)
 LINE_EXTREME = 4  # family shadow shade on the very brightest edge pixels (ramp.shadow)
@@ -34,7 +34,7 @@ LINE_EXTERIOR = LINE_BLACK
 @dataclass
 class OutlineResult:
     line: np.ndarray  # LINE_* codes
-    owner: np.ndarray  # family id that colours each line pixel (-1 where n/a)
+    owner: np.ndarray  # family id that colors each line pixel (-1 where n/a)
 
 
 def _neighbor_families(family_map: np.ndarray) -> np.ndarray:
@@ -106,7 +106,7 @@ def reconstruct_outline(
     line_px = line_px & ~removed
 
     # 4. Owner family for every line pixel: the darker of the neighbouring families, so a stroke
-    #    between belly and body is drawn in the body's outline colour.
+    #    between belly and body is drawn in the body's outline color.
     neigh = _neighbor_families(np.where(protected, -1, family_map))
     owner = np.full((h, w), -1, dtype=np.int32)
     stack_L = np.full(neigh.shape, np.inf)
@@ -116,7 +116,7 @@ def reconstruct_outline(
     darkest = np.argmin(stack_L, axis=0)
     owner_from_neigh = np.take_along_axis(neigh, darkest[None], axis=0)[0]
     owner[line_px & has_any] = owner_from_neigh[line_px & has_any]
-    # Line pixels with no coloured neighbour (inside thick strokes) inherit the nearest owner.
+    # Line pixels with no colored neighbour (inside thick strokes) inherit the nearest owner.
     need = line_px & (owner < 0)
     if need.any() and (owner >= 0).any():
         _, (iy, ix) = ndimage.distance_transform_edt(~(owner >= 0), return_indices=True)
@@ -148,7 +148,7 @@ def reconstruct_outline(
 
     black = line_px & (lit <= t_black)
     black |= blobs | (line_px & protected & source_dark)
-    # Strokes between two different colour families stay black unless the form is clearly lit.
+    # Strokes between two different color families stay black unless the form is clearly lit.
     fam_count = np.zeros((h, w), dtype=np.int32)
     for fid in family_L:
         fam_count += np.any(neigh == fid, axis=0)
@@ -166,7 +166,7 @@ def reconstruct_outline(
     extreme &= ~small_components(extreme, 1)
     line[extreme] = LINE_EXTREME
 
-    # Outline tones should form runs: lone black or highlight pixels inside a base-coloured
+    # Outline tones should form runs: lone black or highlight pixels inside a base-colored
     # stroke read as noise, so they take the stroke's tone.
     for code in (LINE_BLACK, LINE_HIGHLIGHT, LINE_EXTREME):
         singles = (line == code) & small_components(line == code, 1) & ~blobs & ~protected

@@ -26,7 +26,7 @@ class ColorRole(IntEnum):
     ACCENT = 8
 
 
-# Diagnostic colours for role maps only; these never reach the final output.
+# Diagnostic colors for role maps only; these never reach the final output.
 ROLE_DEBUG_COLORS: dict[ColorRole, RGB] = {
     ColorRole.BACKGROUND: (40, 40, 40),
     ColorRole.OUTLINE: (0, 0, 0),
@@ -48,8 +48,8 @@ class ColorInfo:
     L: float
     chroma: float
     hue: float
-    boundary_fraction: float  # fraction of this colour's pixels on the exterior boundary
-    boundary_share: float  # fraction of all exterior boundary pixels that have this colour
+    boundary_fraction: float  # fraction of this color's pixels on the exterior boundary
+    boundary_share: float  # fraction of all exterior boundary pixels that have this color
     role: ColorRole = ColorRole.BASE
 
 
@@ -78,7 +78,7 @@ class SpriteImage:
 
 @dataclass
 class ReferenceStyle:
-    """Relative shading behaviour learned from one or more Gen III references."""
+    """Relative shading behavior learned from one or more Gen III references."""
 
     canvas_size: int = 64
     max_colors: int = 16
@@ -97,7 +97,7 @@ class ReferenceStyle:
     light_hue_shift: float = 6.0  # degrees toward the warm hue
     outline_L: float = 12.0
     outline_chroma: float = 8.0
-    # Share of silhouette-outline pixels that are pure black vs a lighter body-colour shade.
+    # Share of silhouette-outline pixels that are pure black vs a lighter body-color shade.
     outline_black_fraction: float = 0.45
     lit_outline_fraction: float = 0.15
     mean_chroma: float = 40.0
@@ -113,7 +113,7 @@ class ReferenceStyle:
     # Reference hue families: {base_lch, levels: {"-2".."2": rgb}, pixels, achromatic, weight}
     families: list[dict] = field(default_factory=list)
     same_subject: bool = False  # the top reference is the same species/character as the source
-    adopt_colors: bool = False  # pull source colours toward the reference (same species or user-chosen)
+    adopt_colors: bool = False  # pull source colors toward the reference (same species or user-chosen)
     # Coarse map (GRID x GRID) of which family index covers each part of the reference's bbox.
     family_grid: np.ndarray | None = None
     reference_paths: list[Path] = field(default_factory=list)
@@ -126,7 +126,7 @@ class ReferenceStyle:
 
 @dataclass
 class Ramp:
-    """Shade ramp derived for one source local colour."""
+    """Shade ramp derived for one source local color."""
 
     source: RGB
     deep: RGB

@@ -18,7 +18,7 @@ from gbc_to_gba_pokerevamp.palette import Family
 class RenderState:
     """Everything the renderer needs; stages only ever edit these separate layers."""
 
-    idx: np.ndarray  # normalised source colour index, -1 transparent
+    idx: np.ndarray  # normalized source color index, -1 transparent
     mask: np.ndarray
     family_map: np.ndarray  # >=0 family id, -2 source dark/line pixel, -1 transparent
     level: np.ndarray  # int8 ramp level per pixel
@@ -31,7 +31,7 @@ class RenderState:
     line_family: np.ndarray | None = field(default=None)
 
     def family_lookup(self) -> np.ndarray:
-        """Family that colours each line pixel; set by the outline stage, else nearest body pixel."""
+        """Family that colors each line pixel; set by the outline stage, else nearest body pixel."""
         if self.line_family is None:
             valid = (self.family_map >= 0) & ~self.protected
             if not valid.any():
@@ -80,7 +80,7 @@ def render_role_map(idx: np.ndarray, roles: dict[int, ColorRole]) -> np.ndarray:
 
 
 def render_level_map(mask: np.ndarray, level: np.ndarray, line: np.ndarray) -> np.ndarray:
-    """Diagnostic view: blue=deep, cyan=shadow, grey=base, yellow=light, white=highlight, black=line."""
+    """Diagnostic view: blue=deep, cyan=shadow, gray=base, yellow=light, white=highlight, black=line."""
     colors = {-2: (40, 40, 160), -1: (60, 110, 220), 0: (128, 128, 128), 1: (240, 220, 80), 2: (255, 255, 255)}
     h, w = mask.shape
     out = np.zeros((h, w, 4), dtype=np.uint8)

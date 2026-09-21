@@ -79,20 +79,20 @@ def resolve_reference_style(
         weights.append(1.0 / (1 + i))  # best-ranked reference dominates
     src_name = canonical_name_from_path(sprite.source_path) if sprite.source_path else ""
     if (src_name and canonical_name_from_path(paths[0]) == src_name) or (explicit and config.force_same_subject):
-        # Same species: this reference *is* the answer key for colours; ignore style donors.
+        # Same species: this reference *is* the answer key for colors; ignore style donors.
         styles[0].same_subject = True
         styles[0].adopt_colors = True
         return styles[0], paths[:1]
     if explicit:
         styles[0].adopt_colors = True
     else:
-        warnings.append("no same-species reference found; using shape-alike references for shading style only (colours stay the source's)")
+        warnings.append("no same-species reference found; using shape-alike references for shading style only (colors stay the source's)")
     return aggregate_styles(styles, weights), paths
 
 
 def protected_mask(norm: NormalizedSprite, roles: dict[int, ColorRole], infos: list[ColorInfo], kind: str) -> np.ndarray:
     """Small components that are *accents* (pupils, eye whites, mouths, claws) are protected
-    from synthesised shading. A speck only counts as an accent when it is dark, or light and
+    from synthesized shading. A speck only counts as an accent when it is dark, or light and
     ringed by dark linework; stray light pixels in a body region are shading noise and are not.
     """
     from scipy import ndimage
@@ -200,7 +200,7 @@ def resolve_dark_bodies(
 
 
 def merge_light_accents(family_map: np.ndarray, level: np.ndarray, families: list[Family], protected: np.ndarray, style: ReferenceStyle) -> int:
-    """White patches on a coloured body are either shine (GBC had no lighter shade) or a real
+    """White patches on a colored body are either shine (GBC had no lighter shade) or a real
     region such as a belly. Shine is small relative to the body it sits on; a belly is not."""
     from scipy import ndimage
 
@@ -275,7 +275,7 @@ def spatial_split(
             gy = np.clip(((ys - by0) / bh * (G - 1)).round().astype(int), 0, G - 1)
             lookup = np.full(norm.mask.shape, -1, dtype=np.int32)
             lookup[ys, xs] = grid[gy, gx]
-            # One GBC colour may span several official regions (flame + belly shading): assign
+            # One GBC color may span several official regions (flame + belly shading): assign
             # per pixel, but only in coherent patches so the result is not speckled.
             for best in np.unique(lookup[lookup >= 0]):
                 rf = next((r for r in style.families if r.get("index") == int(best)), None)
@@ -351,10 +351,10 @@ def heuristic_regions(
     n_body = resolve_dark_bodies(family_map, level, families, infos, protected, norm.mask, style)
     if n_body:
         warnings.append(f"treated {n_body} thick dark pixels as body/shadow instead of outline")
-    # GBC artists used white for shine on coloured bodies (there was no lighter shade).
+    # GBC artists used white for shine on colored bodies (there was no lighter shade).
     n_merged = merge_light_accents(family_map, level, families, protected, style)
     if n_merged:
-        warnings.append(f"treated {n_merged} white highlight pixels as light shades of the surrounding colour")
+        warnings.append(f"treated {n_merged} white highlight pixels as light shades of the surrounding color")
     return warnings
 
 
@@ -395,11 +395,11 @@ def apply_color_map(
     level: np.ndarray,
     style: ReferenceStyle,
 ) -> list[str]:
-    """Manual overrides from the GUI: force a source colour onto a chosen target colour.
+    """Manual overrides from the GUI: force a source color onto a chosen target color.
 
-    The target is looked up in the reference's colour families; when found, the source colour
+    The target is looked up in the reference's color families; when found, the source color
     takes that family (so shading uses the official ramp) at the level of the chosen tone.
-    Otherwise the chosen colour becomes the base of a fresh family with synthesised shades.
+    Otherwise the chosen color becomes the base of a fresh family with synthesized shades.
     """
     notes: list[str] = []
     for src_text, target in config.color_map.items():
@@ -461,15 +461,15 @@ def revamp_sprite(
 ) -> RevampOutcome:
     """Pure pipeline: source sprite + config -> final 64x64 RGBA and all intermediate stages.
 
-    `pinned_pixels` (source coordinates -> colour) are pixels the user painted by hand: the
-    automatic recolour and shading leave them alone and they end up exactly that colour.
+    `pinned_pixels` (source coordinates -> color) are pixels the user painted by hand: the
+    automatic recolor and shading leave them alone and they end up exactly that color.
     """
     warnings: list[str] = list(sprite.warnings)
     kind = config.kind if config.kind != "unknown" else "pokemon"
     stages: dict[str, np.ndarray] = {}
     stages["01_source_rgba"] = sprite.rgba.copy()
 
-    # Manual "transparent" mappings remove colours from the subject before anything else.
+    # Manual "transparent" mappings remove colors from the subject before anything else.
     infos = analyze_colors(sprite.rgba, sprite.opaque_mask)
     for src_text, target in config.color_map.items():
         if target != "transparent":
@@ -506,7 +506,7 @@ def revamp_sprite(
             src_idx = np.where(aa, outline_idx, src_idx)
         warnings.append(f"folded {int(aa.sum())} outer anti-aliasing pixels into the outline")
     if n_src_colors > 12:
-        warnings.append(f"source already appears high-colour ({n_src_colors} opaque colours); shading synthesis will be light")
+        warnings.append(f"source already appears high-color ({n_src_colors} opaque colors); shading synthesis will be light")
     components = connected_component_count(sprite.opaque_mask)
     if components > 4:
         warnings.append(f"source has {components} disconnected components")
@@ -517,7 +517,7 @@ def revamp_sprite(
         style.occupancy = 0.0
     target_occ = style.occupancy if used_refs and style.occupancy > 0 else None
 
-    # Geometry normalisation.
+    # Geometry normalization.
     norm = normalize_geometry(src_idx, sprite.bbox, roles, config, target_occ)
     warnings.extend(norm.warnings)
     stages["03_normalized"] = index_to_rgba(norm.idx, src_palette)
@@ -526,7 +526,7 @@ def revamp_sprite(
     protected = protected_mask(norm, roles, infos, kind)
 
     # Hand-painted source pixels: locate them on the canvas, protect them from every
-    # automatic decision, and remember their exact colour for the end.
+    # automatic decision, and remember their exact color for the end.
     pinned_mask = np.zeros(norm.mask.shape, dtype=bool)
     pinned_rgb = np.zeros(norm.mask.shape + (3,), dtype=np.uint8)
     if pinned_pixels:
@@ -542,7 +542,7 @@ def revamp_sprite(
         if pinned_mask.any():
             warnings.append(f"{int(pinned_mask.sum())} hand-painted pixels kept exactly as painted")
 
-    # RECOLOUR FIRST (same-species Pokémon): every body pixel -> an official colour region.
+    # RECOLOR FIRST (same-species Pokémon): every body pixel -> an official color region.
     recolored = (
         recolor_same_species(norm.idx, norm.mask, infos, roles, protected, style)
         if (style.same_subject and kind != "trainer" and config.recolor)
@@ -552,7 +552,7 @@ def revamp_sprite(
         families = recolored.families
         family_map = recolored.family_map
         level = recolored.level
-        warnings.append(f"recoloured {recolored.n_pixels} body pixels into {len(families)} official colour regions by position")
+        warnings.append(f"recolored {recolored.n_pixels} body pixels into {len(families)} official color regions by position")
     else:
         families = group_families(infos, kind)
         color_to_family: dict[RGB, tuple[int, int]] = {}
@@ -572,12 +572,12 @@ def revamp_sprite(
         dither_mask = np.zeros(norm.mask.shape, dtype=bool)
         warnings.extend(heuristic_regions(norm, infos, roles, src_palette, families, color_to_family, family_map, level, dither_mask, protected, style))
         if not config.recolor and style.same_subject:
-            warnings.append("positional recolour disabled; colours matched by hue only")
+            warnings.append("positional recolor disabled; colors matched by hue only")
 
-    # Manual colour overrides win over everything automatic.
+    # Manual color overrides win over everything automatic.
     notes = apply_color_map(config, infos, roles, norm, families, family_map, level, style)
     if notes:
-        warnings.append("manual colour map: " + ", ".join(notes))
+        warnings.append("manual color map: " + ", ".join(notes))
 
     # Palette.
     ys_all, xs_all = np.nonzero(norm.mask)
