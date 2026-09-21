@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from PIL import Image, ImageDraw
 
+from gbc_to_gba_pokerevamp.colorspace import rgb_to_lch
 from gbc_to_gba_pokerevamp.geometry import nearest_label
 from gbc_to_gba_pokerevamp.models import RGB, ROLE_DEBUG_COLORS, ColorRole
 from gbc_to_gba_pokerevamp.outline import LINE_BASE, LINE_BLACK, LINE_EXTREME, LINE_HIGHLIGHT
@@ -57,7 +58,8 @@ def render(state: RenderState) -> np.ndarray:
         elif code == LINE_HIGHLIGHT:
             rgb = ramp.deep
         elif code == LINE_EXTREME:
-            rgb = ramp.shadow
+            # The shadow tone only works as an outline when it still reads as a line.
+            rgb = ramp.shadow if rgb_to_lch(np.array(ramp.shadow, np.uint8))[0] <= 68 else ramp.deep
         elif ramp is not None:
             rgb = ramp.at(int(state.level[y, x]))
         else:

@@ -86,12 +86,13 @@ def reconstruct_outline(
     h, w = mask.shape
     boundary = exterior_boundary(mask)
 
-    # 1. Every line pixel: source dark pixels plus a closed silhouette.
+    # 1. Every line pixel: source dark pixels plus a closed silhouette. Accents on the edge
+    #    (Yellow's pale inner anti-aliasing) still need an outline, so protection is ignored here.
     line_px = source_dark.copy()
     if config.outline_strength >= 0.35:
-        line_px |= boundary & ~protected
+        line_px |= boundary
     else:
-        gaps = boundary & ~source_dark & ~protected
+        gaps = boundary & ~source_dark
         line_px |= gaps & dilate(source_dark & boundary, 1, connectivity=8)
 
     # 2. Solid dark blobs (pupils, claws, thick dark markings) are kept black wholesale.
@@ -121,8 +122,19 @@ def reconstruct_outline(
         _, (iy, ix) = ndimage.distance_transform_edt(~(owner >= 0), return_indices=True)
         owner[need] = owner[iy, ix][need]
 
-    # 5. Tone assignment by illumination of the whole form.
-    lit = illumination(mask, mask, light)
+    # 5. Tone assignment. Each line pixel is lit like the sub-form it belongs to (a stroke is
+    #    lit by the body part it bounds), using the same per-sub-form illumination as shading,
+    #    so an arm's outline gets its own light side and shadow side. The whole-silhouette
+    #    field breaks ties for strokes that sit between parts.
+    body = mask & ~line_px
+    if body.any():
+        lit_parts = illumination(body, mask, light)
+        _, (iy, ix) = ndimage.distance_transform_edt(~body, return_indices=True)
+        lit_line = lit_parts[iy, ix]
+    else:
+        lit_line = np.zeros((h, w))
+    lit_whole = illumination(mask, mask, light, fill_holes_up_to=4096)
+    lit = 0.7 * lit_line + 0.3 * lit_whole
     line = np.zeros((h, w), dtype=np.int8)
     line[line_px] = LINE_BASE
     edge_vals = lit[line_px & boundary]
@@ -135,7 +147,7 @@ def reconstruct_outline(
     t_ext = float(np.quantile(edge_vals, 1.0 - hl_frac * 0.25)) if hl_frac > 0 and len(edge_vals) else np.inf
 
     black = line_px & (lit <= t_black)
-    black |= blobs | (line_px & protected)
+    black |= blobs | (line_px & protected & source_dark)
     # Strokes between two different colour families stay black unless the form is clearly lit.
     fam_count = np.zeros((h, w), dtype=np.int32)
     for fid in family_L:
@@ -144,7 +156,7 @@ def reconstruct_outline(
         t_junction = float(np.quantile(edge_vals, min(0.95, black_frac + 0.3)))
         black |= line_px & (fam_count >= 2) & (lit <= t_junction)
     # Lines touching eyes/mouth accents stay black so faces keep their contrast.
-    black |= line_px & dilate(protected, 1, connectivity=8)
+    black |= line_px & dilate(protected & source_dark, 1, connectivity=8)
     line[black] = LINE_BLACK
 
     highlight = line_px & ~black & (lit >= t_hl)
@@ -154,7 +166,9 @@ def reconstruct_outline(
     extreme &= ~small_components(extreme, 1)
     line[extreme] = LINE_EXTREME
 
-    # Isolated single black pixels inside a base-coloured run read as noise; merge them.
-    singles = (line == LINE_BLACK) & small_components(line == LINE_BLACK, 1) & ~blobs & ~protected
-    line[singles] = LINE_BASE
+    # Outline tones should form runs: lone black or highlight pixels inside a base-coloured
+    # stroke read as noise, so they take the stroke's tone.
+    for code in (LINE_BLACK, LINE_HIGHLIGHT, LINE_EXTREME):
+        singles = (line == code) & small_components(line == code, 1) & ~blobs & ~protected
+        line[singles] = LINE_BASE
     return OutlineResult(line=line, owner=owner)

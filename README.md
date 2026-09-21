@@ -140,7 +140,7 @@ from the reference depends on how it was chosen:
 
 | how the reference was chosen | colours | shading / outline style |
 |---|---|---|
-| **same species** (file named `pikachu.png`, `rb_charizard.png`, `yellow_charizard.png`, … and that Gen III sprite exists) | adopted outright — the official sprite is the answer key: Crystal yellow becomes FRLG yellow, white shine becomes pale yellow, even a re-hued body (green → teal Bulbasaur) follows | adopted |
+| **same species** (file named `pikachu.png`, `rb_charizard.png`, `yellow_charizard.png`, … and that Gen III sprite exists) | adopted outright — the official sprite is laid over the source and every region takes the colour that sits there: a GBC colour that doubles as shading *and* a part (Cyndaquil's red belly shading vs flame) is split correctly, black masses become the official dark colour, white bellies become the official cream/white | adopted |
 | **you passed `--reference`** | each source hue is pulled toward the same hue in the reference by `--reference-weight` (0.65); unmatched hues keep their colour | adopted |
 | **auto-picked shape-alikes** (unknown sprite) | kept — a random look-alike must never recolour your character | adopted (how dark shadows are, how much highlight, black vs coloured outline share) |
 
@@ -168,9 +168,11 @@ no stray dots outside the outline):
 
 ```text
 load → background/transparency → subject mask → colour roles → 64×64 geometry
-→ reference style → hue families (thick black = body, white shine = light shade, dither = solid shade)
+→ reference style → RECOLOUR (same species: every body pixel is assigned to an official colour
+  region by position on the body + colour compatibility; otherwise hue families with
+  GBC-convention fixups: thick black = body, white shine = light shade, dither = solid shade)
 → shade ramps → outline rebuild (1px; black in shadow, outline-base colour elsewhere, highlight colour on lit edges)
-→ shade/highlight synthesis (illumination field quantised to reference proportions)
+→ shade/highlight synthesis (each sub-form lit as its own rounded shape, quantised to reference proportions)
 → cluster cleanup → ≤15-colour enforcement → export + compare sheet + report
 ```
 
@@ -182,6 +184,7 @@ load → background/transparency → subject mask → colour roles → 64×64 ge
 | `02_mask.png` | subject mask |
 | `03_normalized.png` | source colours placed/scaled on the 64×64 canvas |
 | `04_roles.png` | diagnostic colour-role map (outline / shadow / base / light …) |
+| `05_recolored.png` | flat recolour: every body region in its official Gen III colour, before any outline/shading work |
 | `05_palette_preview.png` | outline colour + every family ramp (deep, shadow, base, light, highlight, line) |
 | `06_outlined.png` | render after outline reconstruction, before synthesised shading |
 | `07_shaded.png`, `07_levels.png` | render after shading, plus a level/line diagnostic map (black = black outline, purple = outline-base colour, orange = outline highlight) |

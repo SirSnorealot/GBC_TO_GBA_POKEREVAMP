@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+from scipy import ndimage
 
 from gbc_to_gba_pokerevamp.analyze import analyze_colors, exterior_boundary, index_map, shape_descriptors
 from gbc_to_gba_pokerevamp.colorspace import hue_delta
@@ -31,6 +32,7 @@ class ReferenceEntry:
 
 GAME_PREFIXES = ("rb_", "yellow_", "gold_", "silver_", "crystal_", "frlg_", "emerald_")
 GBA_GAMES = ("frlg", "emerald")
+FAMILY_GRID = 32
 
 
 def _game_from_stem(stem: str) -> tuple[str, str]:
@@ -86,10 +88,14 @@ def extract_style(sprite: SpriteImage) -> ReferenceStyle:
     b_L = np.array([infos[i].L for i in b_ids])
     black = b_L <= outline.L + 12
     style.outline_black_fraction = float(np.clip(black.mean(), 0.1, 0.9))
-    non_black_L = b_L[~black]
-    if len(non_black_L):
-        # Highlight outline pixels are clearly lighter than the dark outline-base shade.
-        style.lit_outline_fraction = float(np.clip((non_black_L > 50).sum() / n_boundary, 0.0, 0.5))
+    non_black = b_ids[~black]
+    if len(non_black):
+        # The outline-base tone is the most common non-black edge colour; anything clearly
+        # lighter than it is an outline highlight.
+        vals, counts = np.unique(non_black, return_counts=True)
+        base_L = infos[int(vals[np.argmax(counts)])].L
+        hl = b_L[~black] > base_L + 12
+        style.lit_outline_fraction = float(np.clip(hl.sum() / n_boundary, 0.0, 0.5))
     else:
         style.lit_outline_fraction = 0.0
     boundary_share = {i: float((b_ids == i).mean()) for i in range(len(infos))}
@@ -98,21 +104,37 @@ def extract_style(sprite: SpriteImage) -> ReferenceStyle:
 
     families = group_families(infos, step_levels=True)
     style.families = []
-    for f in families:
+    bw, bh = max(1, x1 - x0), max(1, y1 - y0)
+    grid = np.full((FAMILY_GRID, FAMILY_GRID), -1, dtype=np.int32)
+    for fi, f in enumerate(families):
         by_level: dict[str, tuple[int, int, int]] = {}
         for rgb, lvl in sorted(f.levels.items(), key=lambda kv: -next(c.count for c in f.colors if c.rgb == kv[0])):
             by_level.setdefault(str(lvl), rgb)
         # The family's darkest colour that actually runs along the silhouette is its outline base.
         line_candidates = [c for c in sorted(f.colors, key=lambda c: c.L) if boundary_share[infos.index(c)] >= 0.04 and c.L < f.base.L]
+        member = np.isin(idx, [infos.index(c) for c in f.colors])
+        ys, xs = np.nonzero(member)
+        centroid = [float((xs.mean() - x0) / bw), float((ys.mean() - y0) / bh)] if len(xs) else None
+        if len(xs):
+            gx = np.clip(((xs - x0) / bw * (FAMILY_GRID - 1)).round().astype(int), 0, FAMILY_GRID - 1)
+            gy = np.clip(((ys - y0) / bh * (FAMILY_GRID - 1)).round().astype(int), 0, FAMILY_GRID - 1)
+            grid[gy, gx] = fi
         style.families.append({
+            "index": fi,
             "base_lch": [f.base.L, f.base.chroma, f.base.hue],
             "levels": by_level,
             "line": line_candidates[0].rgb if line_candidates else None,
+            "centroid": centroid,
             "pixels": f.pixel_count,
             "total_pixels": n_opaque,
             "achromatic": f.achromatic,
             "weight": 1.0,
         })
+    # Lines cut the grid; fill them from the nearest coloured cell so lookups always hit a family.
+    if (grid >= 0).any():
+        _, (giy, gix) = ndimage.distance_transform_edt(grid < 0, return_indices=True)
+        grid = grid[giy, gix]
+    style.family_grid = grid
     shadow_d, deep_d, light_d, high_d = [], [], [], []
     shadow_cr, light_cr, shadow_hs, light_hs = [], [], [], []
     weights_s, weights_l = [], []

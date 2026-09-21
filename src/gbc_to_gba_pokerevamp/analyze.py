@@ -56,7 +56,33 @@ def detect_background(rgba: np.ndarray, indices: np.ndarray | None = None) -> tu
     edge_labels = edge_labels[edge_labels != 0]
     background = np.isin(labels, edge_labels)
     opaque = ~background
-    enclosed = same & ~background
+    # Gen I sprites use the lightest colour for both the background and the body fill, and
+    # their outlines have 1px gaps through which that fill "leaks" out. A background region
+    # reachable only through such a gap, and bordered mostly by body colours rather than by
+    # outline, is body fill. Wider openings (between a tail and the body) are left alone.
+    closed = ndimage.binary_closing(np.pad(opaque, 2), structure=FOUR, iterations=1)[2:-2, 2:-2]
+    candidates = ndimage.binary_fill_holes(closed) & background
+    sealed = np.zeros_like(opaque)
+    if candidates.any():
+        L_map = rgb.astype(np.int32).sum(axis=-1)
+        dark = opaque & (L_map < 3 * 60)
+        comp_labels, n_comp = ndimage.label(candidates, structure=FOUR)
+        for k in range(1, n_comp + 1):
+            comp = comp_labels == k
+            ring = ndimage.binary_dilation(comp, structure=EIGHT) & ~comp & opaque
+            if not ring.any() or (~dark[ring]).mean() < 0.35:
+                continue
+            area = int(comp.sum())
+            ys, xs = np.nonzero(comp)
+            bbox_fill = area / ((ys.max() - ys.min() + 1) * (xs.max() - xs.min() + 1))
+            # Tiny pinholes are always fill; larger regions must be blob-like, not a thin strip
+            # between a limb and the body.
+            if area <= 12 or bbox_fill >= 0.5:
+                sealed |= comp
+    if sealed.any():
+        opaque |= sealed
+        warnings.append(f"{int(sealed.sum())} background-coloured pixels inside outline gaps were kept as subject")
+    enclosed = same & opaque & ~sealed
     if enclosed.any():
         warnings.append(
             f"{int(enclosed.sum())} interior pixels share the background colour and were kept as subject"
@@ -200,7 +226,7 @@ def checker_dither(idx: np.ndarray) -> list[tuple[np.ndarray, int, int]]:
         valid = (cand >= 0) & (cand != idx)
         count = (n4 == cand).sum(axis=0)
         n_other = np.maximum(n_other, np.where(valid, count, 0))
-    strict = (idx >= 0) & (n_other >= 3) & (same_diag >= 2)
+    strict = (idx >= 0) & (((n_other >= 3) & (same_diag >= 1)) | (n_other == 4))
     relaxed = (idx >= 0) & (n_other >= 2) & (same_diag >= 1)
     grown = strict | (relaxed & ndimage.binary_dilation(strict, structure=FOUR))
     labels, n = ndimage.label(grown, structure=EIGHT)

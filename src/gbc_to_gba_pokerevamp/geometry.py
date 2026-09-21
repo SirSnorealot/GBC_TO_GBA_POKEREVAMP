@@ -36,20 +36,33 @@ def inside_distance(mask: np.ndarray) -> np.ndarray:
     return ndimage.distance_transform_edt(mask)
 
 
-def illumination(region: np.ndarray, mask: np.ndarray, light: tuple[float, float]) -> np.ndarray:
-    """Per-pixel brightness estimate treating the filled region as a rounded form.
+def illumination(region: np.ndarray, mask: np.ndarray, light: tuple[float, float], fill_holes_up_to: int = 16) -> np.ndarray:
+    """Per-pixel brightness estimate treating each connected sub-form as its own rounded dome.
 
-    The inside-distance field is shaped into a dome whose gradient gives a surface normal;
-    that is lit by the directional light, plus a top-is-lit vertical term. Smoothing only
-    derives orientation; it never touches output pixels.
+    Only small holes (eyes, nostrils) are filled; strokes that split an arm from the body stay
+    boundaries, so every sub-form gets its own light side and shadow side like a hand-shaded
+    sprite. The inside-distance field is shaped into a dome per component, its gradient gives
+    a surface normal lit by the directional light, plus a top-is-lit vertical term.
+    Smoothing only derives orientation; it never touches output pixels.
     """
-    filled = ndimage.binary_fill_holes(region) & mask
-    if not filled.any():
+    if not region.any():
         return np.zeros(mask.shape, dtype=np.float64)
+    holes = ndimage.binary_fill_holes(region) & ~region
+    hole_labels, n_holes = ndimage.label(holes, structure=FOUR)
+    if n_holes:
+        sizes = ndimage.sum(holes, hole_labels, index=np.arange(1, n_holes + 1))
+        small = np.isin(hole_labels, np.nonzero(sizes <= fill_holes_up_to)[0] + 1)
+        filled = (region | small) & mask
+    else:
+        filled = region & mask
     dist = ndimage.distance_transform_edt(filled).astype(np.float64)
-    r = max(1.0, float(dist.max()))
-    height = np.sqrt(np.clip(1.0 - (1.0 - dist / r) ** 2, 0.0, 1.0))
-    smooth = ndimage.gaussian_filter(height, sigma=1.5, mode="constant")
+    labels, n = ndimage.label(filled, structure=EIGHT)
+    radius = np.ones_like(dist)
+    if n:
+        maxes = ndimage.maximum(dist, labels, index=np.arange(1, n + 1))
+        radius = np.where(labels > 0, np.maximum(1.0, np.asarray(maxes)[np.maximum(labels - 1, 0)]), 1.0)
+    height = np.sqrt(np.clip(1.0 - (1.0 - dist / radius) ** 2, 0.0, 1.0))
+    smooth = ndimage.gaussian_filter(height, sigma=1.2, mode="constant")
     gy, gx = np.gradient(smooth)
     lx, ly = light
     ln = np.hypot(lx, ly) + 1e-9
@@ -61,7 +74,7 @@ def illumination(region: np.ndarray, mask: np.ndarray, light: tuple[float, float
     rel_y = np.zeros_like(lit)
     rel_y[filled] = (ys - ys.min()) / max(1, ys.max() - ys.min())
     lit -= 0.35 * (rel_y - 0.5)
-    lit = ndimage.gaussian_filter(lit, sigma=1.0, mode="nearest")
+    lit = ndimage.gaussian_filter(lit, sigma=0.8, mode="nearest")
     lit[~filled] = 0.0
     return lit
 

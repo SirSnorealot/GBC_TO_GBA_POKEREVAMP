@@ -15,6 +15,7 @@ from gbc_to_gba_pokerevamp.models import RGB, ColorInfo, ColorRole, ReferenceSty
 from gbc_to_gba_pokerevamp.normalize import NormalizedSprite, normalize_geometry
 from gbc_to_gba_pokerevamp.outline import reconstruct_outline
 from gbc_to_gba_pokerevamp.palette import Family, build_palette, enforce_color_limit, group_families, palette_preview
+from gbc_to_gba_pokerevamp.recolor import recolor_same_species
 from gbc_to_gba_pokerevamp.references import aggregate_styles, canonical_name_from_path, extract_style, rank_references
 from gbc_to_gba_pokerevamp.render import RenderState, compare_sheet, index_to_rgba, mask_to_rgba, render, render_level_map, render_role_map
 from gbc_to_gba_pokerevamp.report import ConversionReport
@@ -89,15 +90,34 @@ def resolve_reference_style(
     return aggregate_styles(styles, weights), paths
 
 
-def protected_mask(norm: NormalizedSprite, roles: dict[int, ColorRole], kind: str) -> np.ndarray:
-    """Small same-colour components (eyes, mouths, markings) are protected from synthesised shading.
-
-    The area threshold is expressed in source pixels and scaled with the geometry factor.
+def protected_mask(norm: NormalizedSprite, roles: dict[int, ColorRole], infos: list[ColorInfo], kind: str) -> np.ndarray:
+    """Small components that are *accents* (pupils, eye whites, mouths, claws) are protected
+    from synthesised shading. A speck only counts as an accent when it is dark, or light and
+    ringed by dark linework; stray light pixels in a body region are shading noise and are not.
     """
-    max_area = (10 if kind != "trainer" else 6) * max(1.0, norm.scale) ** 2
+    from scipy import ndimage
+
+    from gbc_to_gba_pokerevamp.analyze import EIGHT
+
+    max_area = int(round((10 if kind != "trainer" else 6) * max(1.0, norm.scale) ** 2))
     prot = np.zeros(norm.mask.shape, dtype=bool)
-    for i in roles:
-        prot |= small_components(norm.idx == i, int(round(max_area)))
+    dark = np.zeros(norm.mask.shape, dtype=bool)
+    for i, c in enumerate(infos):
+        if c.L < 40:
+            dark |= norm.idx == i
+    for i, c in enumerate(infos):
+        comps = small_components(norm.idx == i, max_area)
+        if not comps.any():
+            continue
+        if c.L < 40:
+            prot |= comps
+            continue
+        labels, n = ndimage.label(comps, structure=EIGHT)
+        for k in range(1, n + 1):
+            comp = labels == k
+            ring = dilate(comp, 1, connectivity=8) & ~comp & norm.mask
+            if ring.any() and dark[ring].mean() >= 0.5:
+                prot |= comp
     return prot
 
 
@@ -108,6 +128,7 @@ def resolve_dark_bodies(
     infos: list[ColorInfo],
     protected: np.ndarray,
     mask: np.ndarray,
+    style: ReferenceStyle | None = None,
 ) -> int:
     from scipy import ndimage
 
@@ -119,11 +140,41 @@ def resolve_dark_bodies(
         return 0
     outline_info = next((c for c in infos if c.role == ColorRole.OUTLINE), min(infos, key=lambda c: c.L))
     labels, n = ndimage.label(interior, structure=EIGHT)
-    dark_family: Family | None = None
+    dark_families: dict[int, Family] = {}
+    grid = style.family_grid if (style is not None and style.same_subject) else None
+    ys_all, xs_all = np.nonzero(mask)
+    bx0, by0 = xs_all.min(), ys_all.min()
+    bw, bh = max(1, xs_all.max() - bx0), max(1, ys_all.max() - by0)
     changed = 0
     for i in range(1, n + 1):
         comp = labels == i
         if comp.sum() < 12:
+            continue
+        # Same species: the official sprite says what sits here. A dark official region there
+        # means this black mass is a body part of its own (Cyndaquil's back), not shadow.
+        forced: dict | None = None
+        if grid is not None and style is not None:
+            G = grid.shape[0]
+            ys, xs = np.nonzero(comp)
+            gx = np.clip(((xs - bx0) / bw * (G - 1)).round().astype(int), 0, G - 1)
+            gy = np.clip(((ys - by0) / bh * (G - 1)).round().astype(int), 0, G - 1)
+            vals = grid[gy, gx]
+            vals = vals[vals >= 0]
+            if len(vals):
+                idxs, counts = np.unique(vals, return_counts=True)
+                rf = next((r for r in style.families if r.get("index") == int(idxs[np.argmax(counts)])), None)
+                if rf is not None and rf["base_lch"][0] <= 50 and counts.max() / len(vals) >= 0.5:
+                    forced = rf
+        if forced is not None:
+            key = int(forced["index"])
+            fam = dark_families.get(key)
+            if fam is None:
+                fam = Family(id=len(families), colors=[outline_info], base=outline_info, achromatic=True, forced_ref=forced)
+                fam.levels[outline_info.rgb] = 0
+                families.append(fam)
+                dark_families[key] = fam
+            family_map[comp], level[comp] = fam.id, 0
+            changed += int(comp.sum())
             continue
         ring = dilate(comp, 3, connectivity=8) & ~dark & mask
         neigh = family_map[ring]
@@ -137,16 +188,20 @@ def resolve_dark_bodies(
         if host is not None:
             family_map[comp], level[comp] = host.id, -2
         else:
-            if dark_family is None:
-                dark_family = Family(id=len(families), colors=[outline_info], base=outline_info, achromatic=True)
-                dark_family.levels[outline_info.rgb] = 0
-                families.append(dark_family)
-            family_map[comp], level[comp] = dark_family.id, 0
+            fam = dark_families.get(-1)
+            if fam is None:
+                fam = Family(id=len(families), colors=[outline_info], base=outline_info, achromatic=True)
+                fam.levels[outline_info.rgb] = 0
+                families.append(fam)
+                dark_families[-1] = fam
+            family_map[comp], level[comp] = fam.id, 0
         changed += int(comp.sum())
     return changed
 
 
-def merge_light_accents(family_map: np.ndarray, level: np.ndarray, families: list[Family], protected: np.ndarray) -> int:
+def merge_light_accents(family_map: np.ndarray, level: np.ndarray, families: list[Family], protected: np.ndarray, style: ReferenceStyle) -> int:
+    """White patches on a coloured body are either shine (GBC had no lighter shade) or a real
+    region such as a belly. Shine is small relative to the body it sits on; a belly is not."""
     from scipy import ndimage
 
     from gbc_to_gba_pokerevamp.analyze import EIGHT
@@ -170,11 +225,137 @@ def merge_light_accents(family_map: np.ndarray, level: np.ndarray, families: lis
             if host_family is None or host_family.achromatic:
                 continue
             host_area = int((family_map == host).sum())
-            if share >= 0.6 and comp.sum() < 0.15 * host_area:
+            # Shine is small relative to the body it sits on; a belly is not.
+            if share >= 0.6 and comp.sum() <= max(12, 0.06 * host_area):
                 family_map[comp] = host
                 level[comp] = 1
                 merged += int(comp.sum())
     return merged
+
+
+def spatial_split(
+    norm: NormalizedSprite,
+    infos: list[ColorInfo],
+    roles: dict[int, ColorRole],
+    families: list[Family],
+    family_map: np.ndarray,
+    level: np.ndarray,
+    dither_mask: np.ndarray,
+    protected: np.ndarray,
+    style: ReferenceStyle,
+) -> int:
+    from scipy import ndimage
+
+    from gbc_to_gba_pokerevamp.analyze import EIGHT
+
+    grid = style.family_grid
+    if not style.same_subject or grid is None or not style.families:
+        return 0
+    G = grid.shape[0]
+    ys_all, xs_all = np.nonzero(norm.mask)
+    bx0, by0 = xs_all.min(), ys_all.min()
+    bw, bh = max(1, xs_all.max() - bx0), max(1, ys_all.max() - by0)
+    ref_dom = max(style.families, key=lambda rf: rf["pixels"])
+    dominant = max(families, key=lambda f: f.pixel_count)
+    min_area = int(round(25 * max(1.0, norm.scale) ** 2))
+    changed = 0
+    new_families: dict[tuple[int, int], Family] = {}
+    for ci, info in enumerate(infos):
+        if roles[ci] in (ColorRole.OUTLINE, ColorRole.INTERNAL_LINE) or info.rgb == dominant.base.rgb:
+            continue
+        labels, n = ndimage.label((norm.idx == ci) & ~protected, structure=EIGHT)
+        for k in range(1, n + 1):
+            comp = labels == k
+            if comp.sum() < min_area:
+                continue
+            # Include the dithered mix around this component: it is part of the same feature.
+            comp_full = comp | (dither_mask & dilate(comp, 2, connectivity=8))
+            ys, xs = np.nonzero(comp_full)
+            gx = np.clip(((xs - bx0) / bw * (G - 1)).round().astype(int), 0, G - 1)
+            gy = np.clip(((ys - by0) / bh * (G - 1)).round().astype(int), 0, G - 1)
+            lookup = np.full(norm.mask.shape, -1, dtype=np.int32)
+            lookup[ys, xs] = grid[gy, gx]
+            # One GBC colour may span several official regions (flame + belly shading): assign
+            # per pixel, but only in coherent patches so the result is not speckled.
+            for best in np.unique(lookup[lookup >= 0]):
+                rf = next((r for r in style.families if r.get("index") == int(best)), None)
+                if rf is None or rf is ref_dom:
+                    continue
+                if rf["pixels"] / max(1.0, rf.get("total_pixels", rf["pixels"])) < 0.02:
+                    continue
+                patch = comp_full & (lookup == best)
+                patch = ndimage.binary_closing(patch, structure=np.ones((3, 3), bool)) & comp_full
+                patch = patch & ~small_components(patch, 7)
+                if patch.sum() < 12:
+                    continue
+                key = (ci, int(best))
+                fam = new_families.get(key)
+                if fam is None:
+                    fam = Family(id=len(families), colors=[info], base=info, achromatic=info.chroma < 12.0, forced_ref=rf)
+                    fam.levels[info.rgb] = 0
+                    families.append(fam)
+                    new_families[key] = fam
+                solid = patch & comp
+                mixed = patch & ~comp
+                family_map[solid] = fam.id
+                level[solid] = 0
+                family_map[mixed] = fam.id
+                level[mixed] = 1 if info.L < 70 else -1  # dither with a lighter/darker partner
+                changed += int(patch.sum())
+    return changed
+
+
+def heuristic_regions(
+    norm: NormalizedSprite,
+    infos: list[ColorInfo],
+    roles: dict[int, ColorRole],
+    src_palette: list[RGB],
+    families: list[Family],
+    color_to_family: dict[RGB, tuple[int, int]],
+    family_map: np.ndarray,
+    level: np.ndarray,
+    dither_mask: np.ndarray,
+    protected: np.ndarray,
+    style: ReferenceStyle,
+) -> list[str]:
+    """GBC-convention fixups used when no same-species reference is available."""
+    warnings: list[str] = []
+    # Gen III never dithers; a dithered patch was the artist's way of asking for an in-between
+    # shade, so give it a solid one.
+    n_dither = 0
+    for comp, a, b in checker_dither(norm.idx):
+        target = comp & ~protected
+        if not target.any():
+            continue
+        dither_mask |= target
+        light_i, dark_i = (a, b) if infos[a].L >= infos[b].L else (b, a)
+        light_fl = color_to_family.get(src_palette[light_i])
+        dark_fl = color_to_family.get(src_palette[dark_i])
+        if dark_fl is None and light_fl is not None:
+            ring = dilate(target, 2, connectivity=8) & ~target & norm.mask
+            solid_black = (family_map[ring] == -2).mean() if ring.any() else 0.0
+            if target.sum() >= 30 or solid_black >= 0.4:
+                family_map[target], level[target] = -2, 0
+            else:
+                family_map[target], level[target] = light_fl[0], -2
+        elif dark_fl is not None and light_fl is not None and dark_fl[0] == light_fl[0]:
+            family_map[target], level[target] = light_fl[0], light_fl[1]
+        elif dark_fl is not None and light_fl is not None:
+            family_map[target], level[target] = dark_fl[0], min(2, dark_fl[1] + 1)
+        else:
+            continue
+        n_dither += int(target.sum())
+    if n_dither:
+        warnings.append(f"resolved {n_dither} dithered pixels into solid shades")
+    # Thick black is body, not line (Snorlax's body, Gengar's shadow masses).
+    n_body = resolve_dark_bodies(family_map, level, families, infos, protected, norm.mask, style)
+    if n_body:
+        warnings.append(f"treated {n_body} thick dark pixels as body/shadow instead of outline")
+    # GBC artists used white for shine on coloured bodies (there was no lighter shade).
+    n_merged = merge_light_accents(family_map, level, families, protected, style)
+    if n_merged:
+        warnings.append(f"treated {n_merged} white highlight pixels as light shades of the surrounding colour")
+    return warnings
 
 
 def run_revamp(
@@ -210,14 +391,19 @@ def run_revamp(
     n_src_colors = len(infos)
 
     # Stage: Gen 1 sprites (Yellow especially) anti-aliased the *outside* of the outline with
-    # light pixels; those become ugly dots on any non-white background, so revamps drop them.
+    # light pixels. Per the revamp rules they are part of the outline: "colour the whole
+    # outline black, including the anti-aliasing" (deleting them would leave a dotted edge).
     aa = strip_outer_antialias(src_idx, sprite.opaque_mask, infos)
     if aa.any():
-        sprite.opaque_mask = sprite.opaque_mask & ~aa
-        src_idx = np.where(aa, -1, src_idx)
-        ys, xs = np.nonzero(sprite.opaque_mask)
-        sprite.bbox = (int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1)
-        warnings.append(f"removed {int(aa.sum())} outer anti-aliasing pixels from the silhouette edge")
+        outline_idx = next((i for i, c in enumerate(infos) if c.role == ColorRole.OUTLINE), None)
+        if outline_idx is None:
+            sprite.opaque_mask = sprite.opaque_mask & ~aa
+            src_idx = np.where(aa, -1, src_idx)
+            ys, xs = np.nonzero(sprite.opaque_mask)
+            sprite.bbox = (int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1)
+        else:
+            src_idx = np.where(aa, outline_idx, src_idx)
+        warnings.append(f"folded {int(aa.sum())} outer anti-aliasing pixels into the outline")
     if n_src_colors > 12:
         warnings.append(f"source already appears high-colour ({n_src_colors} opaque colours); shading synthesis will be light")
     components = connected_component_count(sprite.opaque_mask)
@@ -264,52 +450,69 @@ def run_revamp(
             family_map[m] = fid
             level[m] = lvl
 
-    protected = protected_mask(norm, roles, kind)
+    protected = protected_mask(norm, roles, infos, kind)
 
-    # Stage: thick black is body, not line (Snorlax's body, Gengar's shadow masses). Interiors
-    # of dark regions >= 3px thick become either the deep shade of the colour they sit in or,
-    # when they border nothing coloured, a dark body colour of their own. A 1px rim stays line.
-    n_body = resolve_dark_bodies(family_map, level, families, infos, protected, norm.mask)
-    if n_body:
-        warnings.append(f"treated {n_body} thick dark pixels as body/shadow instead of outline")
-
-    # Stage: GBC artists used white for shine on coloured bodies (there was no lighter shade).
-    # Small white patches enclosed by one coloured family become that family's light level;
-    # large white regions (bellies, wings) stay their own colour.
-    n_merged = merge_light_accents(family_map, level, families, protected)
-    if n_merged:
-        warnings.append(f"treated {n_merged} white highlight pixels as light shades of the surrounding colour")
+    # Stage: RECOLOUR FIRST. With a same-species reference every body pixel is assigned to an
+    # official colour region (by position on the body + colour compatibility) before any
+    # outline or shading work - the "switch out the colours" step of a hand-made revamp.
+    # Trainers are redesigned between generations, so position matching does not apply.
+    recolored = (
+        recolor_same_species(norm.idx, norm.mask, infos, roles, protected, style)
+        if style.same_subject and kind != "trainer"
+        else None
+    )
+    if recolored is not None:
+        families = recolored.families
+        family_map = recolored.family_map
+        level = recolored.level
+        dither_mask = recolored.dither_mask
+        warnings.append(f"recoloured {recolored.n_pixels} body pixels into {len(families)} official colour regions by position")
+    else:
+        # Style-only / no reference: hue families from the source plus GBC-convention fixups.
+        families = group_families(infos, kind)
+        color_to_family: dict[RGB, tuple[int, int]] = {}
+        for f in families:
+            for rgb, lvl in f.levels.items():
+                color_to_family[rgb] = (f.id, lvl)
+        family_map = np.full(norm.mask.shape, -1, dtype=np.int32)
+        level = np.zeros(norm.mask.shape, dtype=np.int8)
+        for i, rgb in enumerate(src_palette):
+            m = norm.idx == i
+            if roles[i] in (ColorRole.OUTLINE, ColorRole.INTERNAL_LINE):
+                family_map[m] = -2
+            else:
+                fid, lvl = color_to_family[rgb]
+                family_map[m] = fid
+                level[m] = lvl
+        dither_mask = np.zeros(norm.mask.shape, dtype=bool)
+        warnings.extend(heuristic_regions(norm, infos, roles, src_palette, families, color_to_family, family_map, level, dither_mask, protected, style))
 
     # Stage: palette (after the family map is final).
-    outline_rgb, ramps = build_palette(infos, families, style, config)
+    ys_all, xs_all = np.nonzero(norm.mask)
+    bx0, by0 = xs_all.min(), ys_all.min()
+    bw, bh = max(1, xs_all.max() - bx0), max(1, ys_all.max() - by0)
+    centroids: dict[int, tuple[float, float]] = {}
+    for f in families:
+        fy, fx = np.nonzero(family_map == f.id)
+        if len(fx):
+            centroids[f.id] = (float((fx.mean() - bx0) / bw), float((fy.mean() - by0) / bh))
+    outline_rgb, ramps = build_palette(infos, families, style, config, centroids)
+    if debug_dir:
+        flat = RenderState(
+            idx=norm.idx, mask=norm.mask, family_map=family_map, level=level, line=np.zeros(norm.mask.shape, np.int8),
+            protected=protected, families=families, outline_rgb=outline_rgb, source_palette=src_palette, source_roles=roles,
+        )
+        save_rgba_png(render(flat), debug_dir / "05_recolored.png")
+    # A family identified as the body's GBC shading colour becomes shadow *of* the body, so
+    # shade synthesis credits it and never re-shades it with its own darker tones.
+    for f in families:
+        if f.shade_of is not None:
+            m = family_map == f.id
+            level[m] = np.clip(level[m] - 1, -2, 2)
+            family_map[m] = f.shade_of
     if debug_dir:
         preview = [outline_rgb] + [c for r in ramps for c in (r.deep, r.shadow, r.base, r.light, r.highlight, r.line)]
         save_rgba_png(palette_preview(preview), debug_dir / "05_palette_preview.png")
-
-    # Stage: resolve GBC checkerboard dithering. Gen III never dithers; a dithered patch was the
-    # artist's way of asking for an in-between shade, so give it a solid one.
-    n_dither = 0
-    for comp, a, b in checker_dither(norm.idx):
-        target = comp & ~protected
-        if not target.any():
-            continue
-        light_i, dark_i = (a, b) if infos[a].L >= infos[b].L else (b, a)
-        light_fl = color_to_family.get(src_palette[light_i])
-        dark_fl = color_to_family.get(src_palette[dark_i])
-        if dark_fl is None and light_fl is not None:
-            # colour x black -> deep shadow of that colour
-            family_map[target], level[target] = light_fl[0], -2
-        elif dark_fl is not None and light_fl is not None and dark_fl[0] == light_fl[0]:
-            # two shades of one colour -> the lighter shade; shading re-evaluates base pixels anyway
-            family_map[target], level[target] = light_fl[0], light_fl[1]
-        elif dark_fl is not None and light_fl is not None:
-            # colour x white (or another colour) -> a lighter tone of the darker colour
-            family_map[target], level[target] = dark_fl[0], min(2, dark_fl[1] + 1)
-        else:
-            continue
-        n_dither += int(target.sum())
-    if n_dither:
-        warnings.append(f"resolved {n_dither} dithered pixels into solid shades")
     source_dark = family_map == -2
 
     # Stage: outlines.

@@ -114,10 +114,12 @@ class ReferenceStyle:
     families: list[dict] = field(default_factory=list)
     same_subject: bool = False  # the top reference is the same species/character as the source
     adopt_colors: bool = False  # pull source colours toward the reference (same species or user-chosen)
+    # Coarse map (GRID x GRID) of which family index covers each part of the reference's bbox.
+    family_grid: np.ndarray | None = None
     reference_paths: list[Path] = field(default_factory=list)
 
     def to_dict(self) -> dict:
-        d = {k: v for k, v in self.__dict__.items() if k != "reference_paths"}
+        d = {k: v for k, v in self.__dict__.items() if k not in ("reference_paths", "family_grid")}
         d["reference_paths"] = [str(p) for p in self.reference_paths]
         return d
 
