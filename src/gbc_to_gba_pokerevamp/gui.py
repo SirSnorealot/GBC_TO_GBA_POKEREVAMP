@@ -268,8 +268,6 @@ class RevampApp(tk.Tk):
                 w.configure(bg=t["canvas"])
             elif role == "list":
                 w.configure(bg=t["field"], fg=t["fg"], selectbackground=t["select"], selectforeground=t["fg"], highlightbackground=t["border"])
-            elif role == "text":
-                w.configure(bg=t["log"], fg=t["fg"], insertbackground=t["fg"], highlightbackground=t["border"])
             elif role == "frame":
                 w.configure(bg=t["bg"])
             elif role == "swatch":
@@ -283,32 +281,44 @@ class RevampApp(tk.Tk):
         self.apply_theme()
 
     # ------------------------------------------------------------------ UI construction
+    def _scroll_column(self, parent: ttk.Frame, column: int, width: int) -> ttk.Frame:
+        """A fixed-width, mouse-wheel scrollable column; returns the frame to pack sections into."""
+        outer = ttk.Frame(parent, width=width)
+        outer.grid(row=0, column=column, sticky="nsw" if column == 0 else "nse", padx=(0, 0) if column == 0 else (8, 0))
+        outer.grid_propagate(False)
+        canvas = self._reg(tk.Canvas(outer, highlightthickness=0, width=width - 20), "frame")
+        vsb = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=vsb.set)
+        vsb.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        inner = ttk.Frame(canvas)
+        win = canvas.create_window((0, 0), window=inner, anchor="nw")
+        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda e: canvas.itemconfigure(win, width=e.width))
+        self._columns.append((canvas, inner))
+        return inner
+
     def _build_ui(self) -> None:
         root = ttk.Frame(self, padding=6)
         root.pack(fill="both", expand=True)
         root.columnconfigure(1, weight=1)
         root.rowconfigure(0, weight=1)
 
-        left_outer = ttk.Frame(root, width=400)
-        left_outer.grid(row=0, column=0, sticky="nsw")
-        left_outer.grid_propagate(False)
-        canvas = self._reg(tk.Canvas(left_outer, highlightthickness=0, width=380), "frame")
-        vsb = ttk.Scrollbar(left_outer, orient="vertical", command=canvas.yview)
-        canvas.configure(yscrollcommand=vsb.set)
-        vsb.pack(side="right", fill="y")
-        canvas.pack(side="left", fill="both", expand=True)
-        left = ttk.Frame(canvas)
-        left_id = canvas.create_window((0, 0), window=left, anchor="nw")
-        left.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.bind("<Configure>", lambda e: canvas.itemconfigure(left_id, width=e.width))
+        self._columns: list[tuple[tk.Canvas, ttk.Frame]] = []
+        left = self._scroll_column(root, 0, 400)
+        side = self._scroll_column(root, 2, 380)
+        self.side_canvas = self._columns[1][0]
 
         def _wheel(e: tk.Event) -> None:
             x, y = self.winfo_pointerxy()
             w = self.winfo_containing(x, y)
             while w is not None:
-                if w is canvas or w is left:
-                    canvas.yview_scroll(int(-e.delta / 120), "units")
-                    return
+                if isinstance(w, tk.Listbox):
+                    return  # the list scrolls itself
+                for canvas, inner in self._columns:
+                    if w is canvas or w is inner:
+                        canvas.yview_scroll(int(-e.delta / 120), "units")
+                        return
                 if w is self.preview:
                     if e.state & 0x1:  # Shift held -> horizontal
                         self.preview.xview_scroll(int(-e.delta / 120), "units")
@@ -357,8 +367,7 @@ class RevampApp(tk.Tk):
         self.lib_filter = tk.StringVar()
         self.lib_filter.trace_add("write", lambda *a: self._refresh_library())
         ttk.Entry(row, textvariable=self.lib_filter, width=14).pack(side="left", padx=(4, 0))
-        self.lib_list = self._reg(tk.Listbox(f, height=7, exportselection=False, relief="flat"), "list")
-        self.lib_list.pack(fill="x", pady=(4, 0))
+        self.lib_list = self._listbox(f, height=12)
         self.lib_list.bind("<Double-Button-1>", lambda e: self._open_library_selection())
         self.lib_list.bind("<Return>", lambda e: self._open_library_selection())
         lrow = ttk.Frame(f)
@@ -379,16 +388,23 @@ class RevampApp(tk.Tk):
         ttk.Entry(row, textvariable=self.ref_filter, width=18).pack(side="left")
         ttk.Button(row, text="Browse file…", command=self.browse_reference).pack(side="left", padx=4)
         ttk.Button(row, text="Download refs…", command=self.download_references).pack(side="left")
-        self.ref_list = self._reg(tk.Listbox(f, height=5, exportselection=False, relief="flat"), "list")
-        self.ref_list.pack(fill="x", pady=(4, 0))
+        self.ref_list = self._listbox(f, height=6)
         self.ref_list.bind("<<ListboxSelect>>", self._on_ref_selected)
         self.shiny_check = ttk.Checkbutton(f, text="Show the shiny version next to each result", variable=self.shiny, command=self.schedule)
         self.shiny_check.pack(anchor="w", pady=(4, 0))
         self.ref_label = ttk.Label(f, text="", style="Muted.TLabel")
         self.ref_label.pack(anchor="w")
 
-        # Paint palettes (the tools themselves live in the toolbar above the preview)
-        f = ttk.LabelFrame(left, text="Brush colors", padding=6)
+        # Output
+        f = ttk.LabelFrame(left, text="Output", padding=6)
+        f.pack(fill="x", pady=(0, 6))
+        ttk.Button(f, text="Save to output/", command=self.save_result).pack(side="left")
+        ttk.Button(f, text="Save session…", command=self.save_preset).pack(side="left", padx=4)
+        ttk.Button(f, text="Load session…", command=self.load_preset).pack(side="left")
+
+        # Right column: everything that changes per sprite / per run lives here so the left
+        # column never jumps.
+        f = ttk.LabelFrame(side, text="Brush colors", padding=6)
         f.pack(fill="x", pady=(0, 6))
         ttk.Label(f, text="Reference colors (one row per region, dark → light):", style="Muted.TLabel").pack(anchor="w")
         self.palette_frame = ttk.Frame(f)
@@ -400,19 +416,21 @@ class RevampApp(tk.Tk):
         erow.pack(fill="x", pady=(6, 0))
         self.edit_label = ttk.Label(erow, text="edits: source 0, result 0", style="Muted.TLabel")
         self.edit_label.pack(side="left")
-        ttk.Button(erow, text="Clear result edits", style="Tool.TButton", command=lambda: self.clear_edits("result")).pack(side="right")
-        ttk.Button(erow, text="Clear source edits", style="Tool.TButton", command=lambda: self.clear_edits("source")).pack(side="right", padx=3)
+        brow = ttk.Frame(f)
+        brow.pack(fill="x", pady=(3, 0))
+        ttk.Button(brow, text="Clear source edits", style="Tool.TButton", command=lambda: self.clear_edits("source")).pack(side="left")
+        ttk.Button(brow, text="Clear result edits", style="Tool.TButton", command=lambda: self.clear_edits("result")).pack(side="left", padx=3)
         ttk.Label(f, text="Paint on the Source or the Result panel. Pixels you paint on the Source are kept exactly as painted. Right-click a painted pixel to undo just that edit. Keys: I pick, B pencil, G fill, E eraser, X erase region, Ctrl+Z undo.", style="Muted.TLabel", wraplength=340).pack(anchor="w", pady=(4, 0))
 
         # Color map
-        f = ttk.LabelFrame(left, text="Color mapping  (whole source color → target)", padding=6)
+        f = ttk.LabelFrame(side, text="Color mapping  (whole source color → target)", padding=6)
         f.pack(fill="x", pady=(0, 6))
         self.colors_body = ttk.Frame(f)
         self.colors_body.pack(fill="x")
         ttk.Button(f, text="Clear all overrides", style="Tool.TButton", command=self.clear_color_map).pack(anchor="w", pady=(4, 0))
 
         # Effects
-        f = ttk.LabelFrame(left, text="Effects", padding=6)
+        f = ttk.LabelFrame(side, text="Effects", padding=6)
         f.pack(fill="x", pady=(0, 6))
         for text, field in EFFECTS:
             var = tk.BooleanVar(value=bool(getattr(self.config_model, field)))
@@ -420,7 +438,7 @@ class RevampApp(tk.Tk):
             ttk.Checkbutton(f, text=text, variable=var, command=self.schedule).pack(anchor="w")
 
         # Tuning
-        f = ttk.LabelFrame(left, text="Tuning", padding=6)
+        f = ttk.LabelFrame(side, text="Tuning", padding=6)
         f.pack(fill="x", pady=(0, 6))
         f.columnconfigure(1, weight=1)
         for i, (text, field, lo, hi) in enumerate(SLIDERS):
@@ -433,14 +451,7 @@ class RevampApp(tk.Tk):
             var.trace_add("write", lambda *a, l=lbl, v=var: l.configure(text=f"{v.get():.2f}"))
         ttk.Button(f, text="Reset tuning", style="Tool.TButton", command=self.reset_tuning).grid(row=len(SLIDERS), column=0, columnspan=3, sticky="w", pady=(4, 0))
 
-        # Output
-        f = ttk.LabelFrame(left, text="Output", padding=6)
-        f.pack(fill="x", pady=(0, 6))
-        ttk.Button(f, text="Save to output/", command=self.save_result).pack(side="left")
-        ttk.Button(f, text="Save session…", command=self.save_preset).pack(side="left", padx=4)
-        ttk.Button(f, text="Load session…", command=self.load_preset).pack(side="left")
-
-        # Right: toolbar (tools + brush), view bar, preview
+        # Center: toolbar (tools + brush), view bar, preview
         right = ttk.Frame(root)
         right.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
         right.rowconfigure(3, weight=1)
@@ -485,8 +496,9 @@ class RevampApp(tk.Tk):
         self.frame_next.pack(side="left")
         self.view_all_check = ttk.Checkbutton(bar, text="All frames", variable=self.view_all, command=self.redraw)
         self.view_all_check.pack(side="left", padx=(6, 0))
-        self.copy_edits_button = ttk.Button(bar, text="Edits → all", style="Tool.TButton", command=self.copy_edits_to_all_frames)
-        self.copy_edits_button.pack(side="left", padx=(6, 0))
+        self.paint_all = tk.BooleanVar(value=False)
+        self.paint_all_check = ttk.Checkbutton(bar, text="Paint on all frames", variable=self.paint_all)
+        self.paint_all_check.pack(side="left", padx=(6, 0))
         self.frame_select_frame = ttk.Frame(right)
         self.frame_select_frame.grid(row=2, column=0, columnspan=2, sticky="ew")
         self.preview = self._reg(tk.Canvas(right, highlightthickness=0), "canvas")
@@ -504,8 +516,6 @@ class RevampApp(tk.Tk):
         self.preview.bind("<Configure>", lambda e: self.redraw())
         self.hover = ttk.Label(right, text="", style="Muted.TLabel")
         self.hover.grid(row=5, column=0, sticky="w")
-        self.log = self._reg(tk.Text(right, height=5, wrap="word", state="disabled", font=("Consolas", 9), relief="flat"), "text")
-        self.log.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(4, 0))
 
         self.set_tool("pencil")
         self._refresh_ref_list()
@@ -765,10 +775,12 @@ class RevampApp(tk.Tk):
                 elif kind == "error":
                     self._running = False
                     self.status.configure(text="error")
-                    self._log(f"ERROR: {payload}")
+                    messagebox.showerror("Revamp failed", str(payload))
                 elif kind == "bootstrap":
                     self.status.configure(text="references ready")
-                    self._log(payload)
+                    if str(payload).startswith("ERROR"):
+                        messagebox.showerror("Download references", str(payload))
+                    self._refresh_library()
                     self._refresh_ref_list()
                     self.schedule()
         except queue.Empty:
@@ -789,21 +801,10 @@ class RevampApp(tk.Tk):
             rep = outcome.report
             frame_note = f"  frame {frame + 1}/{self.frame_count}" if self.frame_count > 1 else ""
             self.status.configure(text=f"{rep.source_opaque_colors} → {rep.target_opaque_colors} colors" + ("  + shiny" if shiny_outcome else "") + frame_note)
-            warn = list(outcome.warnings)
-            if self.shiny.get() and shiny_outcome is None and self.reference_mode.get() != "none":
-                warn.append("no shiny palette available for this reference")
-            self._log("\n".join(warn) if warn else "(no warnings)")
-            self._rebuild_color_rows()
-            self._rebuild_palettes()
+            self._rebuild_side_panels()
             self.redraw()
         elif self.view_all.get():
             self.redraw()
-
-    def _log(self, text: str) -> None:
-        self.log.configure(state="normal")
-        self.log.delete("1.0", "end")
-        self.log.insert("1.0", text)
-        self.log.configure(state="disabled")
 
     # ------------------------------------------------------------------ preview
     def _frame_images(self, frame: int) -> tuple[Image.Image, Image.Image]:
@@ -885,7 +886,7 @@ class RevampApp(tk.Tk):
         multi = self.frame_count > 1
         self.frame_label.configure(text=f"Frame {self.current_frame + 1}/{self.frame_count}")
         state = "normal" if multi else "disabled"
-        for w in (self.frame_prev, self.frame_next, self.copy_edits_button, self.view_all_check):
+        for w in (self.frame_prev, self.frame_next, self.paint_all_check, self.view_all_check):
             w.configure(state=state)
         # Output-frame checkboxes.
         for child in self.frame_select_frame.winfo_children():
@@ -931,22 +932,14 @@ class RevampApp(tk.Tk):
         self._update_frame_ui()
         self._update_edit_label()
         if self.outcome is not None:
-            self._rebuild_color_rows()
-            self._rebuild_palettes()
+            self._rebuild_side_panels()
             self.redraw()
         else:
             self.schedule()
 
-    def copy_edits_to_all_frames(self) -> None:
-        """Copy this frame's paint edits (pixel-wise) onto every other frame."""
-        src = dict(self.source_edits)
-        res = dict(self.result_edits)
-        for k in range(self.frame_count):
-            if k != self.current_frame:
-                self.frame_source_edits[k] = dict(src)
-                self.frame_result_edits[k] = dict(res)
-        self.undo_stack = []
-        self.schedule()
+    def _edit_frames(self) -> list[int]:
+        """Frames a paint action applies to."""
+        return list(range(self.frame_count)) if self.paint_all.get() and self.frame_count > 1 else [self.current_frame]
 
     def redraw(self) -> None:
         if not hasattr(self, "preview"):
@@ -1054,8 +1047,7 @@ class RevampApp(tk.Tk):
             self.current_frame = frame
             self._update_frame_ui()
             self._update_edit_label()
-            self._rebuild_color_rows()
-            self._rebuild_palettes()
+            self._rebuild_side_panels()
 
     def _on_press(self, event: tk.Event) -> None:
         hit = self._hit(event.x, event.y)
@@ -1099,11 +1091,11 @@ class RevampApp(tk.Tk):
         self._drag_painted.add((which, px, py))
         self._paint(which, [(px, py)], erase=(tool == "erase"))
 
-    def _record(self, which: str, pos: tuple[int, int], old: RGB | None, had: bool) -> None:
+    def _record(self, frame: int, which: str, pos: tuple[int, int], old: RGB | None, had: bool) -> None:
         if self._group is None:
             self._group = []
             self.undo_stack.append(self._group)
-        self._group.append((self.current_frame, which, pos, old, had))
+        self._group.append((frame, which, pos, old, had))
 
     def _on_release(self, _event: tk.Event) -> None:
         self._drag_painted.clear()
@@ -1115,26 +1107,30 @@ class RevampApp(tk.Tk):
             return
         which, frame, px, py = hit
         self._focus_frame(frame)
-        edits = self.source_edits if which == "source" else self.result_edits
-        if (px, py) in edits:
-            old = edits.pop((px, py))
-            self._group = None
-            self._record(which, (px, py), old, True)
-            self._group = None
+        self._group = None
+        removed = False
+        for k in self._edit_frames():
+            edits = self.frame_source_edits.setdefault(k, {}) if which == "source" else self.frame_result_edits.setdefault(k, {})
+            if (px, py) in edits:
+                self._record(k, which, (px, py), edits.pop((px, py)), True)
+                removed = True
+        self._group = None
+        if removed:
             self._after_edit(which)
 
     def _paint(self, which: str, pixels: list[tuple[int, int]], erase: bool = False) -> None:
         if self.outcome is None:
             return
-        edits = self.source_edits if which == "source" else self.result_edits
         color = None if (erase or self.brush_is_transparent) else self.brush
-        arr = self._panel_array(which)
-        for x, y in pixels:
-            if arr is not None and color is None and not arr[y, x, 3]:
-                continue  # erasing an already-transparent pixel is a no-op
-            had = (x, y) in edits
-            self._record(which, (x, y), edits.get((x, y)), had)
-            edits[(x, y)] = color
+        for k in self._edit_frames():
+            edits = self.frame_source_edits.setdefault(k, {}) if which == "source" else self.frame_result_edits.setdefault(k, {})
+            arr = self._panel_array(which, k)
+            for x, y in pixels:
+                if arr is not None and color is None and not arr[y, x, 3]:
+                    continue  # erasing an already-transparent pixel is a no-op
+                had = (x, y) in edits
+                self._record(k, which, (x, y), edits.get((x, y)), had)
+                edits[(x, y)] = color
         self._after_edit(which)
 
     def _after_edit(self, which: str) -> None:
@@ -1150,9 +1146,9 @@ class RevampApp(tk.Tk):
         group = self.undo_stack.pop()
         self._group = None
         touched: set[str] = set()
-        frame = group[-1][0] if group else self.current_frame
-        if frame != self.current_frame:
-            self.set_frame(frame)
+        frames = {u[0] for u in group}
+        if self.current_frame not in frames and frames:
+            self.set_frame(min(frames))
         for _frame, which, pos, old, had in reversed(group):
             edits = self.frame_source_edits.setdefault(_frame, {}) if which == "source" else self.frame_result_edits.setdefault(_frame, {})
             if had:
@@ -1164,11 +1160,13 @@ class RevampApp(tk.Tk):
             self._after_edit(which)
 
     def clear_edits(self, which: str) -> None:
-        if which == "source":
-            self.frame_source_edits[self.current_frame] = {}
-        else:
-            self.frame_result_edits[self.current_frame] = {}
-        self.undo_stack = [g for g in self.undo_stack if not any(u[0] == self.current_frame and u[1] == which for u in g)]
+        frames = self._edit_frames()
+        for k in frames:
+            if which == "source":
+                self.frame_source_edits[k] = {}
+            else:
+                self.frame_result_edits[k] = {}
+        self.undo_stack = [g for g in self.undo_stack if not any(u[0] in frames and u[1] == which for u in g)]
         self._after_edit(which)
 
     def _update_edit_label(self) -> None:
@@ -1214,6 +1212,26 @@ class RevampApp(tk.Tk):
                       width=2, relief="flat", bd=0, highlightthickness=1, highlightbackground=THEMES[self.theme_name.get()]["border"],
                       command=command or (lambda v=rgb: self.set_brush(v)))
         return b
+
+    def _listbox(self, parent: tk.Widget, height: int) -> tk.Listbox:
+        """Listbox with its own scrollbar."""
+        row = ttk.Frame(parent)
+        row.pack(fill="x", pady=(4, 0))
+        lb = self._reg(tk.Listbox(row, height=height, exportselection=False, relief="flat"), "list")
+        sb = ttk.Scrollbar(row, orient="vertical", command=lb.yview)
+        lb.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        lb.pack(side="left", fill="both", expand=True)
+        return lb  # type: ignore[return-value]
+
+    def _rebuild_side_panels(self) -> None:
+        """Rebuild palettes + color rows without the right column jumping back to the top."""
+        pos = self.side_canvas.yview()[0]
+        self._rebuild_color_rows()
+        self._rebuild_palettes()
+        # The column briefly shrinks while widgets are replaced, which clamps the view to the
+        # top; restore once the new geometry has settled.
+        self.after(80, lambda: self.side_canvas.yview_moveto(pos))
 
     def _rebuild_palettes(self) -> None:
         for fr in (self.palette_frame, self.src_palette_frame):
@@ -1392,8 +1410,7 @@ class RevampApp(tk.Tk):
         except (OSError, SpriteLoadError) as exc:
             messagebox.showerror("Save failed", str(exc))
             return
-        self._log(f"saved to {run_dir}\n  " + "  ".join(saved))
-        self.status.configure(text="saved")
+        self.status.configure(text=f"saved {len(saved)} files to output\\{run_dir.name}")
 
     def _session_data(self) -> dict:
         def dump(edits: dict[int, Edit]) -> dict:
