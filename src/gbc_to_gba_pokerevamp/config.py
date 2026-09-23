@@ -43,6 +43,8 @@ class RevampConfig(BaseModel):
     occupancy_max: int = 58
     anchor_x: int | None = None
     anchor_y: int | None = None
+    # Canvas position of the source's pixel (0,0); keeps every animation frame in the same place.
+    canvas_origin: tuple[int, int] | None = None
     debug: bool = False
     report: bool = True
     compare: bool = True  # write a source | revamp | reference sheet next to every result

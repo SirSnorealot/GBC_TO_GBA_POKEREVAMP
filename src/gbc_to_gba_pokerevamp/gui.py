@@ -26,7 +26,7 @@ from gbc_to_gba_pokerevamp.paths import project_root
 from gbc_to_gba_pokerevamp.references import canonical_name_from_path, list_references, normal_variant, shiny_variant
 from gbc_to_gba_pokerevamp.render import compare_sheet
 from gbc_to_gba_pokerevamp.revamp import RevampError, RevampOutcome, infer_kind, revamp_sprite, rgba_to_image
-from gbc_to_gba_pokerevamp.sprite_io import SpriteLoadError, load_sprite, save_rgba_png
+from gbc_to_gba_pokerevamp.sprite_io import SpriteLoadError, find_frame_sheet, load_frames, load_sprite, save_rgba_png
 
 CANVAS = 64
 STAGES = [
@@ -146,10 +146,19 @@ class RevampApp(tk.Tk):
         self.theme_name = tk.StringVar(value="dark")
         self.input_path: Path | None = None
         self.config_model = RevampConfig()
-        self.outcome: RevampOutcome | None = None
+        # Animation frames: one outcome / edit set per frame; `outcome` etc. refer to the current frame.
+        self.frame_sheet: Path | None = None
+        self.frame_size: int | None = None
+        self.frame_count = 1
+        self.current_frame = 0
+        self.frames_selected: set[int] = {0}
+        self.frame_select_vars: dict[int, tk.BooleanVar] = {}
+        self.view_all = tk.BooleanVar(value=False)
+        self.frame_outcomes: dict[int, RevampOutcome] = {}
+        self.frame_edited_source: dict[int, np.ndarray] = {}
+        self.frame_source_edits: dict[int, Edit] = {0: {}}
+        self.frame_result_edits: dict[int, Edit] = {0: {}}
         self.shiny_outcome: RevampOutcome | None = None
-        self.display_final: np.ndarray | None = None
-        self.edited_source: np.ndarray | None = None
         self.reference_mode = tk.StringVar(value="auto")
         self.reference_path: Path | None = None
         self.shiny = tk.BooleanVar(value=False)
@@ -159,13 +168,11 @@ class RevampApp(tk.Tk):
         self.stage_name = tk.StringVar(value=STAGES[0][0])
         self.style_var = tk.StringVar(value="frlg")
         self.kind_var = tk.StringVar(value="pokemon")
-        self.tool = tk.StringVar(value="pencil")  # pick | pencil | fill
+        self.tool = tk.StringVar(value="pencil")  # pick | pencil | fill | erase | erase_fill
         self.brush: RGB | None = (0, 0, 0)
         self.brush_is_transparent = False
-        self.source_edits: Edit = {}
-        self.result_edits: Edit = {}
-        self.undo_stack: list[list[tuple[str, tuple[int, int], RGB | None, bool]]] = []
-        self._group: list[tuple[str, tuple[int, int], RGB | None, bool]] | None = None
+        self.undo_stack: list[list[tuple[int, str, tuple[int, int], RGB | None, bool]]] = []
+        self._group: list[tuple[int, str, tuple[int, int], RGB | None, bool]] | None = None
         self.effect_vars: dict[str, tk.BooleanVar] = {}
         self.slider_vars: dict[str, tk.DoubleVar] = {}
         self.color_rows: dict[str, dict] = {}
@@ -183,6 +190,33 @@ class RevampApp(tk.Tk):
         self.after(50, self._poll)
         if input_path is not None:
             self.load_sprite_file(input_path)
+
+    # ------------------------------------------------------------------ current-frame accessors
+    @property
+    def outcome(self) -> RevampOutcome | None:
+        return self.frame_outcomes.get(self.current_frame)
+
+    @property
+    def edited_source(self) -> np.ndarray | None:
+        return self.frame_edited_source.get(self.current_frame)
+
+    @property
+    def source_edits(self) -> Edit:
+        return self.frame_source_edits.setdefault(self.current_frame, {})
+
+    @property
+    def result_edits(self) -> Edit:
+        return self.frame_result_edits.setdefault(self.current_frame, {})
+
+    def display_final_for(self, frame: int) -> np.ndarray | None:
+        oc = self.frame_outcomes.get(frame)
+        if oc is None:
+            return None
+        return apply_result_edits(oc.final, self.frame_result_edits.get(frame, {}))
+
+    @property
+    def display_final(self) -> np.ndarray | None:
+        return self.display_final_for(self.current_frame)
 
     # ------------------------------------------------------------------ theming
     def _reg(self, widget: tk.Widget, role: str) -> tk.Widget:
@@ -302,6 +336,32 @@ class RevampApp(tk.Tk):
         style.bind("<<ComboboxSelected>>", lambda e: (self._refresh_ref_list(), self.schedule()))
         ttk.Button(f, text="Theme", command=self.toggle_theme, style="Tool.TButton").grid(row=0, column=2, sticky="e")
 
+        # Source library: every GB/GBC sprite the bootstrap copied, ready to open.
+        f = ttk.LabelFrame(left, text="Source library  (sprites from the games)", padding=6)
+        f.pack(fill="x", pady=(0, 6))
+        row = ttk.Frame(f)
+        row.pack(fill="x")
+        self.lib_game = tk.StringVar(value="crystal")
+        game = ttk.Combobox(row, textvariable=self.lib_game, values=["all", "rb", "yellow", "gold", "silver", "crystal"], state="readonly", width=8)
+        game.pack(side="left")
+        game.bind("<<ComboboxSelected>>", lambda e: self._refresh_library())
+        self.lib_kind = tk.StringVar(value="pokemon")
+        lk = ttk.Combobox(row, textvariable=self.lib_kind, values=["pokemon", "trainer"], state="readonly", width=8)
+        lk.pack(side="left", padx=4)
+        lk.bind("<<ComboboxSelected>>", lambda e: self._refresh_library())
+        self.lib_filter = tk.StringVar()
+        self.lib_filter.trace_add("write", lambda *a: self._refresh_library())
+        ttk.Entry(row, textvariable=self.lib_filter, width=14).pack(side="left", padx=(4, 0))
+        self.lib_list = self._reg(tk.Listbox(f, height=7, exportselection=False, relief="flat"), "list")
+        self.lib_list.pack(fill="x", pady=(4, 0))
+        self.lib_list.bind("<Double-Button-1>", lambda e: self._open_library_selection())
+        self.lib_list.bind("<Return>", lambda e: self._open_library_selection())
+        lrow = ttk.Frame(f)
+        lrow.pack(fill="x", pady=(4, 0))
+        ttk.Button(lrow, text="Open selected", style="Tool.TButton", command=self._open_library_selection).pack(side="left")
+        self.lib_label = ttk.Label(lrow, text="double-click a sprite to open it", style="Muted.TLabel")
+        self.lib_label.pack(side="left", padx=8)
+
         # Reference
         f = ttk.LabelFrame(left, text="Gen III reference", padding=6)
         f.pack(fill="x", pady=(0, 6))
@@ -378,7 +438,7 @@ class RevampApp(tk.Tk):
         # Right: toolbar (tools + brush), view bar, preview
         right = ttk.Frame(root)
         right.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
-        right.rowconfigure(2, weight=1)
+        right.rowconfigure(3, weight=1)
         right.columnconfigure(0, weight=1)
         tools = ttk.Frame(right)
         tools.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 4))
@@ -411,12 +471,25 @@ class RevampApp(tk.Tk):
         st.bind("<<ComboboxSelected>>", lambda e: self.redraw())
         self.status = ttk.Label(bar, text="", style="Muted.TLabel")
         self.status.pack(side="right")
+        ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=8)
+        self.frame_prev = ttk.Button(bar, text="◀", width=3, style="Tool.TButton", command=lambda: self.set_frame(self.current_frame - 1))
+        self.frame_prev.pack(side="left")
+        self.frame_label = ttk.Label(bar, text="Frame 1/1", width=11, anchor="center")
+        self.frame_label.pack(side="left")
+        self.frame_next = ttk.Button(bar, text="▶", width=3, style="Tool.TButton", command=lambda: self.set_frame(self.current_frame + 1))
+        self.frame_next.pack(side="left")
+        self.view_all_check = ttk.Checkbutton(bar, text="All frames", variable=self.view_all, command=self.redraw)
+        self.view_all_check.pack(side="left", padx=(6, 0))
+        self.copy_edits_button = ttk.Button(bar, text="Edits → all", style="Tool.TButton", command=self.copy_edits_to_all_frames)
+        self.copy_edits_button.pack(side="left", padx=(6, 0))
+        self.frame_select_frame = ttk.Frame(right)
+        self.frame_select_frame.grid(row=2, column=0, columnspan=2, sticky="ew")
         self.preview = self._reg(tk.Canvas(right, highlightthickness=0), "canvas")
-        self.preview.grid(row=2, column=0, sticky="nsew")
+        self.preview.grid(row=3, column=0, sticky="nsew")
         pv_y = ttk.Scrollbar(right, orient="vertical", command=self.preview.yview)
-        pv_y.grid(row=2, column=1, sticky="ns")
+        pv_y.grid(row=3, column=1, sticky="ns")
         pv_x = ttk.Scrollbar(right, orient="horizontal", command=self.preview.xview)
-        pv_x.grid(row=3, column=0, sticky="ew")
+        pv_x.grid(row=4, column=0, sticky="ew")
         self.preview.configure(yscrollcommand=pv_y.set, xscrollcommand=pv_x.set)
         self.preview.bind("<Button-1>", self._on_press)
         self.preview.bind("<B1-Motion>", self._on_drag)
@@ -425,13 +498,15 @@ class RevampApp(tk.Tk):
         self.preview.bind("<Motion>", self._on_motion)
         self.preview.bind("<Configure>", lambda e: self.redraw())
         self.hover = ttk.Label(right, text="", style="Muted.TLabel")
-        self.hover.grid(row=4, column=0, sticky="w")
+        self.hover.grid(row=5, column=0, sticky="w")
         self.log = self._reg(tk.Text(right, height=5, wrap="word", state="disabled", font=("Consolas", 9), relief="flat"), "text")
-        self.log.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        self.log.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(4, 0))
 
         self.set_tool("pencil")
         self._refresh_ref_list()
+        self._refresh_library()
         self._update_brush_ui()
+        self._update_frame_ui()
 
     # ------------------------------------------------------------------ config
     def current_config(self) -> RevampConfig:
@@ -495,11 +570,57 @@ class RevampApp(tk.Tk):
         self.file_label.configure(text=path.name)
         self.kind_var.set(infer_kind(path, RevampConfig()))
         self.config_model = self.config_model.model_copy(update={"color_map": {}})
-        self.source_edits, self.result_edits, self.undo_stack = {}, {}, []
-        self.title(f"PokeRevamp Assistant — {path.name}")
+        # Frames: a sibling <stem>_frames.png or a tall frame-sheet PNG (frames stacked vertically).
+        self.frame_sheet, self.frame_size, self.frame_count = None, None, 1
+        sheet = find_frame_sheet(path)
+        if sheet is not None:
+            try:
+                frames = load_frames(sheet)
+            except SpriteLoadError:
+                frames = []
+            if len(frames) > 1:
+                self.frame_sheet = sheet
+                self.frame_size = frames[0].size[0]
+                self.frame_count = len(frames)
+        self.current_frame = 0
+        self.frames_selected = set(range(self.frame_count))
+        self.view_all.set(self.frame_count > 1)
+        self.frame_outcomes, self.frame_edited_source = {}, {}
+        self.frame_source_edits = {i: {} for i in range(self.frame_count)}
+        self.frame_result_edits = {i: {} for i in range(self.frame_count)}
+        self.undo_stack = []
+        self.title(f"PokeRevamp Assistant — {path.name}" + (f"  ({self.frame_count} frames)" if self.frame_count > 1 else ""))
         self._refresh_ref_list()
         self._update_edit_label()
+        self._update_frame_ui()
         self.schedule()
+
+    def _load_frame_sprite(self, frame: int, kind: str):
+        """Fresh SpriteImage for one frame (the pipeline mutates its mask, so never cache)."""
+        if self.frame_sheet is not None:
+            frames = load_frames(self.frame_sheet, kind=kind, frame_size=self.frame_size)  # type: ignore[arg-type]
+            if frame < len(frames):
+                return frames[frame]
+        return load_sprite(self.input_path, kind=kind)  # type: ignore[arg-type]
+
+    def _refresh_library(self) -> None:
+        game = self.lib_game.get()
+        entries = list_references(kind=self.lib_kind.get(), game=None if game == "all" else game, era="gbc")
+        flt = self.lib_filter.get().strip().lower()
+        self._library = [e for e in entries if flt in e.name.lower()]
+        self.lib_list.delete(0, "end")
+        for e in self._library:
+            anim = " +" if e.path.with_name(e.path.stem + "_frames.png").exists() else ""
+            self.lib_list.insert("end", f"{e.game}: {e.name}{anim}")
+        n = len(self._library)
+        self.lib_label.configure(text=f"{n} sprites — + = has extra frames" if n else "none found — run Download refs…")
+
+    def _open_library_selection(self) -> None:
+        sel = self.lib_list.curselection()
+        if not sel:
+            return
+        e = self._library[int(sel[0])]
+        self.load_sprite_file(e.path)
 
     def browse_reference(self) -> None:
         start = project_root() / "data" / "references" / "gba"
@@ -574,22 +695,36 @@ class RevampApp(tk.Tk):
         config = self.current_config()
         refs = self._refs()
         shiny_refs = self._shiny_refs()
-        path = self.input_path
-        edits = dict(self.source_edits)
+        current = self.current_frame
+        all_edits = {k: dict(v) for k, v in self.frame_source_edits.items()}
+        n_frames = self.frame_count
 
         def work() -> None:
             try:
-                sprite = load_sprite(path, kind=config.kind)  # type: ignore[arg-type]
-                apply_source_edits(sprite, edits)
-                edited = sprite.rgba.copy()
-                pinned = {pos: rgb for pos, rgb in edits.items() if rgb is not None}
-                outcome = revamp_sprite(sprite, config, refs, input_name=str(path), pinned_pixels=pinned)
-                shiny_outcome = None
-                if shiny_refs:
-                    sprite2 = load_sprite(path, kind=config.kind)  # type: ignore[arg-type]
-                    apply_source_edits(sprite2, edits)
-                    shiny_outcome = revamp_sprite(sprite2, config, shiny_refs, input_name=str(path), pinned_pixels=pinned)
-                self._results.put(("outcome", (outcome, edited, shiny_outcome)))
+                # Every frame is placed with frame 0's centering so the animation does not jitter.
+                cfg = config
+                if n_frames > 1:
+                    f0 = self._load_frame_sprite(0, config.kind)
+                    apply_source_edits(f0, all_edits.get(0, {}))
+                    x0, y0, x1, y1 = f0.bbox
+                    origin = ((config.canvas_size - (x1 - x0)) // 2 - x0, (config.canvas_size - (y1 - y0)) // 2 - y0)
+                    cfg = config.model_copy(update={"canvas_origin": origin})
+                # Current frame first so the preview responds quickly; the rest follow.
+                order = [current] + [i for i in range(n_frames) if i != current]
+                for k in order:
+                    edits = all_edits.get(k, {})
+                    sprite = self._load_frame_sprite(k, cfg.kind)
+                    apply_source_edits(sprite, edits)
+                    edited = sprite.rgba.copy()
+                    pinned = {pos: rgb for pos, rgb in edits.items() if rgb is not None}
+                    outcome = revamp_sprite(sprite, cfg, refs, input_name=f"{self.input_path} [frame {k}]", pinned_pixels=pinned)
+                    shiny_outcome = None
+                    if k == current and shiny_refs:
+                        sprite2 = self._load_frame_sprite(k, cfg.kind)
+                        apply_source_edits(sprite2, edits)
+                        shiny_outcome = revamp_sprite(sprite2, cfg, shiny_refs, input_name=str(self.input_path), pinned_pixels=pinned)
+                    self._results.put(("frame", (k, outcome, edited, shiny_outcome, k == current)))
+                self._results.put(("done", None))
             except (SpriteLoadError, RevampError, ValueError, IndexError) as exc:  # shown in the log, never crash the UI
                 self._results.put(("error", str(exc)))
 
@@ -599,8 +734,13 @@ class RevampApp(tk.Tk):
         try:
             while True:
                 kind, payload = self._results.get_nowait()
-                if kind == "outcome":
-                    self._finished(*payload)
+                if kind == "frame":
+                    self._frame_finished(*payload)
+                elif kind == "done":
+                    self._running = False
+                    if self._dirty:
+                        self._dirty = False
+                        self.schedule()
                 elif kind == "error":
                     self._running = False
                     self.status.configure(text="error")
@@ -610,28 +750,30 @@ class RevampApp(tk.Tk):
                     self._log(payload)
                     self._refresh_ref_list()
                     self.schedule()
-                if self._dirty and not self._running:
-                    self._dirty = False
-                    self.schedule()
         except queue.Empty:
             pass
-        self.after(50, self._poll)
+        try:
+            self.after(50, self._poll)
+        except tk.TclError:
+            pass  # window destroyed
 
-    def _finished(self, outcome: RevampOutcome, edited_source: np.ndarray, shiny_outcome: RevampOutcome | None = None) -> None:
-        self._running = False
-        self.outcome = outcome
-        self.shiny_outcome = shiny_outcome
-        self.edited_source = edited_source
-        self.display_final = apply_result_edits(outcome.final, self.result_edits)
-        rep = outcome.report
-        self.status.configure(text=f"{rep.source_opaque_colors} → {rep.target_opaque_colors} colors" + ("  + shiny" if shiny_outcome else ""))
-        warn = list(outcome.warnings)
-        if self.shiny.get() and shiny_outcome is None and self.reference_mode.get() != "none":
-            warn.append("no shiny palette available for this reference")
-        self._log("\n".join(warn) if warn else "(no warnings)")
-        self._rebuild_color_rows()
-        self._rebuild_palettes()
-        self.redraw()
+    def _frame_finished(self, frame: int, outcome: RevampOutcome, edited_source: np.ndarray, shiny_outcome: RevampOutcome | None, is_current: bool) -> None:
+        self.frame_outcomes[frame] = outcome
+        self.frame_edited_source[frame] = edited_source
+        if is_current:
+            self.shiny_outcome = shiny_outcome
+            rep = outcome.report
+            frame_note = f"  frame {frame + 1}/{self.frame_count}" if self.frame_count > 1 else ""
+            self.status.configure(text=f"{rep.source_opaque_colors} → {rep.target_opaque_colors} colors" + ("  + shiny" if shiny_outcome else "") + frame_note)
+            warn = list(outcome.warnings)
+            if self.shiny.get() and shiny_outcome is None and self.reference_mode.get() != "none":
+                warn.append("no shiny palette available for this reference")
+            self._log("\n".join(warn) if warn else "(no warnings)")
+            self._rebuild_color_rows()
+            self._rebuild_palettes()
+            self.redraw()
+        elif self.view_all.get():
+            self.redraw()
 
     def _log(self, text: str) -> None:
         self.log.configure(state="normal")
@@ -640,36 +782,131 @@ class RevampApp(tk.Tk):
         self.log.configure(state="disabled")
 
     # ------------------------------------------------------------------ preview
-    def _panel_rows(self) -> list[list[tuple[str, Image.Image, str]]]:
-        """Rows of (panel id, image, label). Row 2 is the shiny preview when available."""
-        assert self.outcome is not None
-        src = self.edited_source if self.edited_source is not None else self.outcome.sprite.rgba
-        row1: list[tuple[str, Image.Image, str]] = [("source", Image.fromarray(np.ascontiguousarray(src), "RGBA"), "Source (paintable)")]
+    def _frame_images(self, frame: int) -> tuple[Image.Image, Image.Image]:
+        """(source, result) images for one frame at the selected stage."""
+        oc = self.frame_outcomes[frame]
+        src = self.frame_edited_source.get(frame, oc.sprite.rgba)
         stage_key = dict(STAGES).get(self.stage_name.get(), "09_final")
-        if stage_key == "09_final" and self.display_final is not None:
-            result = self.display_final
+        if stage_key == "09_final":
+            result = self.display_final_for(frame)
+            if result is None:
+                result = oc.final
         else:
-            result = self.outcome.stages.get(stage_key, self.outcome.final)
-        row1.append(("result", Image.fromarray(np.ascontiguousarray(result), "RGBA"), f"{self.stage_name.get()} (paintable)"))
-        if self.outcome.used_refs:
+            result = oc.stages.get(stage_key, oc.final)
+        return Image.fromarray(np.ascontiguousarray(src), "RGBA"), Image.fromarray(np.ascontiguousarray(result), "RGBA")
+
+    def _panel_rows(self) -> list[list[tuple[str, int, Image.Image, str]]]:
+        """Rows of (panel kind, frame, image, label).
+
+        Each row is Source | Result for one frame (reference on the first row). The all-frames
+        view shows one row per selected frame; otherwise only the current frame.
+        """
+        assert self.outcome is not None
+        oc = self.outcome
+        rows: list[list[tuple[str, int, Image.Image, str]]] = []
+        ref_panel: tuple[str, int, Image.Image, str] | None = None
+        if oc.used_refs:
             try:
-                row1.append(("reference", load_sprite(self.outcome.used_refs[0]).image, f"Reference: {self.outcome.used_refs[0].stem}"))
+                ref_panel = ("reference", -1, load_sprite(oc.used_refs[0]).image, f"Reference: {oc.used_refs[0].stem}")
             except SpriteLoadError:
-                pass
-        rows = [row1]
+                ref_panel = None
+        stage = self.stage_name.get()
+        result_name = stage if stage != STAGES[0][0] else "Result"
+        if self.view_all.get() and self.frame_count > 1:
+            shown = [k for k in sorted(self.frames_selected) if k in self.frame_outcomes]
+        else:
+            shown = [self.current_frame]
+        for k in shown:
+            s, r = self._frame_images(k)
+            tag = f" {k + 1}" if self.frame_count > 1 else ""
+            cur = " <" if self.frame_count > 1 and k == self.current_frame and self.view_all.get() else ""
+            row = [("source", k, s, f"Source{tag}{cur}"), ("result", k, r, f"{result_name}{tag}{cur}")]
+            if ref_panel and not rows:
+                row.append(ref_panel)
+            rows.append(row)
         if self.shiny_outcome is not None:
             so = self.shiny_outcome
+            stage_key = dict(STAGES).get(stage, "09_final")
             shiny_result = so.stages.get(stage_key, so.final)
-            row2: list[tuple[str, Image.Image, str]] = [
-                ("shiny_result", Image.fromarray(np.ascontiguousarray(shiny_result), "RGBA"), "Shiny result (pick only)"),
+            row2: list[tuple[str, int, Image.Image, str]] = [
+                ("shiny_result", self.current_frame, Image.fromarray(np.ascontiguousarray(shiny_result), "RGBA"), f"Shiny result{' ' + str(self.current_frame + 1) if self.frame_count > 1 else ''} (pick only)"),
             ]
             if so.used_refs:
                 try:
-                    row2.append(("shiny_reference", load_sprite(so.used_refs[0]).image, f"Shiny reference: {so.used_refs[0].stem}"))
+                    row2.append(("shiny_reference", -1, load_sprite(so.used_refs[0]).image, f"Shiny reference: {so.used_refs[0].stem}"))
                 except SpriteLoadError:
                     pass
             rows.append(row2)
         return rows
+
+    # ------------------------------------------------------------------ frames
+    def _update_frame_ui(self) -> None:
+        multi = self.frame_count > 1
+        self.frame_label.configure(text=f"Frame {self.current_frame + 1}/{self.frame_count}")
+        state = "normal" if multi else "disabled"
+        for w in (self.frame_prev, self.frame_next, self.copy_edits_button, self.view_all_check):
+            w.configure(state=state)
+        # Output-frame checkboxes.
+        for child in self.frame_select_frame.winfo_children():
+            child.destroy()
+        self.frame_select_vars = {}
+        if multi:
+            ttk.Label(self.frame_select_frame, text="Frames in the output:", style="Muted.TLabel").pack(side="left")
+            for k in range(self.frame_count):
+                var = tk.BooleanVar(value=k in self.frames_selected)
+                self.frame_select_vars[k] = var
+                ttk.Checkbutton(self.frame_select_frame, text=str(k + 1), variable=var, command=lambda kk=k: self._toggle_frame_selected(kk)).pack(side="left", padx=(4, 0))
+            ttk.Button(self.frame_select_frame, text="all", style="Tool.TButton", width=4, command=lambda: self._select_frames(set(range(self.frame_count)))).pack(side="left", padx=(8, 0))
+            ttk.Button(self.frame_select_frame, text="1+2", style="Tool.TButton", width=4, command=lambda: self._select_frames({0, min(1, self.frame_count - 1)})).pack(side="left", padx=(3, 0))
+            ttk.Label(self.frame_select_frame, text="   unselected frames are hidden and left out of the saved sheet", style="Muted.TLabel").pack(side="left")
+
+    def _toggle_frame_selected(self, k: int) -> None:
+        if self.frame_select_vars[k].get():
+            self.frames_selected.add(k)
+        else:
+            self.frames_selected.discard(k)
+        if not self.frames_selected:
+            self.frames_selected.add(k)
+            self.frame_select_vars[k].set(True)
+        self._after_selection_change()
+
+    def _select_frames(self, frames: set[int]) -> None:
+        self.frames_selected = set(frames)
+        for k, var in self.frame_select_vars.items():
+            var.set(k in self.frames_selected)
+        self._after_selection_change()
+
+    def _after_selection_change(self) -> None:
+        if self.current_frame not in self.frames_selected:
+            self.set_frame(min(self.frames_selected))
+        else:
+            self.redraw()
+
+    def set_frame(self, frame: int) -> None:
+        if not (0 <= frame < self.frame_count):
+            return
+        self.current_frame = frame
+        self._update_frame_ui()
+        self._update_edit_label()
+        if self.outcome is not None:
+            self._rebuild_color_rows()
+            self._rebuild_palettes()
+            self.redraw()
+            if self.shiny.get():
+                self.schedule()  # the shiny row is computed for the current frame only
+        else:
+            self.schedule()
+
+    def copy_edits_to_all_frames(self) -> None:
+        """Copy this frame's paint edits (pixel-wise) onto every other frame."""
+        src = dict(self.source_edits)
+        res = dict(self.result_edits)
+        for k in range(self.frame_count):
+            if k != self.current_frame:
+                self.frame_source_edits[k] = dict(src)
+                self.frame_result_edits[k] = dict(res)
+        self.undo_stack = []
+        self.schedule()
 
     def redraw(self) -> None:
         if not hasattr(self, "preview"):
@@ -706,38 +943,43 @@ class RevampApp(tk.Tk):
         for r, panels in enumerate(rows):
             y_top = pad + r * row_h
             # The shiny row lines up under the Result column.
-            x = pad + (cw + pad) if (r == 1 and ncols >= 3) else pad
-            for which, img, label in panels:
+            shiny_row = bool(panels) and panels[0][0] == "shiny_result"
+            x = pad + (cw + pad) if shiny_row else pad
+            for which, frame, img, label in panels:
                 canvas_img = Image.new("RGBA", (CANVAS, CANVAS), (0, 0, 0, 0))
                 ox, oy = (CANVAS - img.width) // 2, (CANVAS - img.height) // 2
                 canvas_img.paste(img, (ox, oy), img)
                 big = canvas_img.resize((cw, cw), Image.Resampling.NEAREST)
                 sheet.alpha_composite(big, (x, y_top + label_h))
-                draw.rectangle([x - 1, y_top + label_h - 1, x + cw, y_top + label_h + cw], outline=(90, 90, 96))
+                current = which in ("source", "result") and self.view_all.get() and self.frame_count > 1 and frame == self.current_frame
+                draw.rectangle([x - 1, y_top + label_h - 1, x + cw, y_top + label_h + cw], outline=(76, 139, 245) if current else (90, 90, 96), width=2 if current else 1)
                 draw.text((x, y_top), label, fill=text_fill)
-                self._panel_boxes.append((which, x, y_top + label_h, z, ox, oy, img.width, img.height))
+                self._panel_boxes.append((which, frame, x, y_top + label_h, z, ox, oy, img.width, img.height))
                 x += cw + pad
         self._photo = ImageTk.PhotoImage(sheet)
         self.preview.create_image(0, 0, anchor="nw", image=self._photo)
         self.preview.configure(scrollregion=(0, 0, total_w, total_h))
 
-    def _hit(self, ex: int, ey: int) -> tuple[str, int, int] | None:
-        """Panel name and image pixel under a window coordinate (accounts for scrolling)."""
+    def _hit(self, ex: int, ey: int) -> tuple[str, int, int, int] | None:
+        """(panel kind, frame, px, py) under a window coordinate (accounts for scrolling)."""
         ex = int(self.preview.canvasx(ex))
         ey = int(self.preview.canvasy(ey))
-        for which, x0, y0, z, ox, oy, w, h in self._panel_boxes:
+        for which, frame, x0, y0, z, ox, oy, w, h in self._panel_boxes:
             px, py = (ex - x0) // z - ox, (ey - y0) // z - oy
             if 0 <= px < w and 0 <= py < h and x0 <= ex < x0 + CANVAS * z and y0 <= ey < y0 + CANVAS * z:
-                return which, int(px), int(py)
+                return which, frame, int(px), int(py)
         return None
 
-    def _panel_array(self, which: str) -> np.ndarray | None:
+    def _panel_array(self, which: str, frame: int | None = None) -> np.ndarray | None:
         if self.outcome is None:
             return None
-        if which == "source":
-            return self.edited_source if self.edited_source is not None else self.outcome.sprite.rgba
-        if which == "result":
-            return self.display_final if self.display_final is not None else self.outcome.final
+        f = self.current_frame if frame is None or frame < 0 else frame
+        oc = self.frame_outcomes.get(f)
+        if which == "source" and oc is not None:
+            return self.frame_edited_source.get(f, oc.sprite.rgba)
+        if which == "result" and oc is not None:
+            res = self.display_final_for(f)
+            return res if res is not None else oc.final
         if which == "reference" and self.outcome.used_refs:
             return load_sprite(self.outcome.used_refs[0]).rgba
         if which == "shiny_result" and self.shiny_outcome is not None:
@@ -751,31 +993,44 @@ class RevampApp(tk.Tk):
         if hit is None:
             self.hover.configure(text="")
             return
-        which, px, py = hit
-        arr = self._panel_array(which)
+        which, frame, px, py = hit
+        arr = self._panel_array(which, frame)
         if arr is None:
             return
         p = arr[py, px]
-        self.hover.configure(text=f"{which} ({px},{py})  " + (f"rgb {p[0]},{p[1]},{p[2]}" if p[3] else "transparent"))
+        ftag = f" f{frame + 1}" if frame >= 0 and self.frame_count > 1 else ""
+        self.hover.configure(text=f"{which}{ftag} ({px},{py})  " + (f"rgb {p[0]},{p[1]},{p[2]}" if p[3] else "transparent"))
+
+    def _focus_frame(self, frame: int) -> None:
+        """Make a clicked frame current without leaving the all-frames view."""
+        if frame >= 0 and frame != self.current_frame and frame < self.frame_count:
+            self.current_frame = frame
+            self._update_frame_ui()
+            self._update_edit_label()
+            self._rebuild_color_rows()
+            self._rebuild_palettes()
+            if self.shiny.get():
+                self.schedule()
 
     def _on_press(self, event: tk.Event) -> None:
         hit = self._hit(event.x, event.y)
         if hit is None:
             return
-        which, px, py = hit
+        which, frame, px, py = hit
         tool = self.tool.get()
         if which in PICK_ONLY or tool == "pick":
-            arr = self._panel_array(which)
+            arr = self._panel_array(which, frame)
             if arr is not None and arr[py, px, 3]:
                 self.set_brush(tuple(int(v) for v in arr[py, px, :3]))  # type: ignore[arg-type]
                 if which == "source":
                     self._highlight_color(_key(self.brush))  # type: ignore[arg-type]
             return
+        self._focus_frame(frame)
         if tool in ("pencil", "erase"):
             self._group = None
             self._paint(which, [(px, py)], erase=(tool == "erase"))
         elif tool in ("fill", "erase_fill"):
-            arr = self._panel_array(which)
+            arr = self._panel_array(which, frame)
             if arr is None:
                 return
             region = flood_region(arr, px, py)
@@ -791,9 +1046,9 @@ class RevampApp(tk.Tk):
         hit = self._hit(event.x, event.y)
         if hit is None:
             return
-        which, px, py = hit
-        if which in PICK_ONLY:
-            return
+        which, frame, px, py = hit
+        if which in PICK_ONLY or frame != self.current_frame:
+            return  # a stroke stays on the frame it started on
         if (which, px, py) in self._drag_painted:
             return
         self._drag_painted.add((which, px, py))
@@ -803,7 +1058,7 @@ class RevampApp(tk.Tk):
         if self._group is None:
             self._group = []
             self.undo_stack.append(self._group)
-        self._group.append((which, pos, old, had))
+        self._group.append((self.current_frame, which, pos, old, had))
 
     def _on_release(self, _event: tk.Event) -> None:
         self._drag_painted.clear()
@@ -813,7 +1068,8 @@ class RevampApp(tk.Tk):
         hit = self._hit(event.x, event.y)
         if hit is None or hit[0] in PICK_ONLY:
             return
-        which, px, py = hit
+        which, frame, px, py = hit
+        self._focus_frame(frame)
         edits = self.source_edits if which == "source" else self.result_edits
         if (px, py) in edits:
             old = edits.pop((px, py))
@@ -839,8 +1095,7 @@ class RevampApp(tk.Tk):
     def _after_edit(self, which: str) -> None:
         self._update_edit_label()
         if which == "result" and self.outcome is not None:
-            self.display_final = apply_result_edits(self.outcome.final, self.result_edits)
-            self.redraw()
+            self.redraw()  # result edits are applied at draw time
         else:
             self.schedule()
 
@@ -850,8 +1105,11 @@ class RevampApp(tk.Tk):
         group = self.undo_stack.pop()
         self._group = None
         touched: set[str] = set()
-        for which, pos, old, had in reversed(group):
-            edits = self.source_edits if which == "source" else self.result_edits
+        frame = group[-1][0] if group else self.current_frame
+        if frame != self.current_frame:
+            self.set_frame(frame)
+        for _frame, which, pos, old, had in reversed(group):
+            edits = self.frame_source_edits.setdefault(_frame, {}) if which == "source" else self.frame_result_edits.setdefault(_frame, {})
             if had:
                 edits[pos] = old
             else:
@@ -862,14 +1120,19 @@ class RevampApp(tk.Tk):
 
     def clear_edits(self, which: str) -> None:
         if which == "source":
-            self.source_edits = {}
+            self.frame_source_edits[self.current_frame] = {}
         else:
-            self.result_edits = {}
-        self.undo_stack = [g for g in self.undo_stack if not any(u[0] == which for u in g)]
+            self.frame_result_edits[self.current_frame] = {}
+        self.undo_stack = [g for g in self.undo_stack if not any(u[0] == self.current_frame and u[1] == which for u in g)]
         self._after_edit(which)
 
     def _update_edit_label(self) -> None:
-        self.edit_label.configure(text=f"edits: source {len(self.source_edits)}, result {len(self.result_edits)}")
+        total_s = sum(len(v) for v in self.frame_source_edits.values())
+        total_r = sum(len(v) for v in self.frame_result_edits.values())
+        text = f"edits: source {len(self.source_edits)}, result {len(self.result_edits)}"
+        if self.frame_count > 1:
+            text += f"  (all frames: {total_s} / {total_r})"
+        self.edit_label.configure(text=text)
 
     # ------------------------------------------------------------------ brush / tools
     def set_tool(self, name: str) -> None:
@@ -1045,22 +1308,33 @@ class RevampApp(tk.Tk):
     def save_result(self) -> None:
         if self.outcome is None or self.input_path is None or self.display_final is None:
             return
+        if self.frame_count > 1 and len(self.frame_outcomes) < self.frame_count:
+            messagebox.showinfo("Still working", "Not every frame has been rendered yet — wait a moment and save again.")
+            return
         run_dir = project_root() / "output" / self.input_path.stem
         run_dir.mkdir(parents=True, exist_ok=True)
-        final = self.display_final
+        chosen = sorted(self.frames_selected) if self.frame_count > 1 else [0]
+        finals = [self.display_final_for(k) for k in chosen]
+        if any(f is None for f in finals):
+            return
+        final = finals[0]  # type: ignore[assignment]
         try:
             save_rgba_png(final, run_dir / "revamped.png")
-            images = [rgba_to_image(self.edited_source if self.edited_source is not None else self.outcome.sprite.rgba), rgba_to_image(final)]
+            images = [rgba_to_image(self.frame_edited_source.get(chosen[0], self.frame_outcomes[chosen[0]].sprite.rgba)), rgba_to_image(final)]
             labels = [f"source: {self.input_path.name}", "revamp"]
             if self.outcome.used_refs:
                 images.append(load_sprite(self.outcome.used_refs[0]).image)
                 labels.append(f"reference: {self.outcome.used_refs[0].name}")
-            saved = "revamped.png  compare.png  report.json  session.json"
+            saved = ["revamped.png", "compare.png", "report.json", "session.json"]
             if self.shiny_outcome is not None:
                 save_rgba_png(self.shiny_outcome.final, run_dir / "revamped_shiny.png")
                 images.append(rgba_to_image(self.shiny_outcome.final))
                 labels.append("shiny revamp")
-                saved += "  revamped_shiny.png"
+                saved.append("revamped_shiny.png")
+            if len(chosen) > 1:
+                sheet = np.concatenate(finals, axis=0)  # type: ignore[arg-type]
+                save_rgba_png(sheet, run_dir / "revamped_frames.png")
+                saved.append("revamped_frames.png")
             compare_sheet(images, labels, scale=4).save(run_dir / "compare.png", format="PNG")
             rep = self.outcome.report
             rep.output = str(run_dir / "revamped.png")
@@ -1069,17 +1343,22 @@ class RevampApp(tk.Tk):
         except (OSError, SpriteLoadError) as exc:
             messagebox.showerror("Save failed", str(exc))
             return
-        self._log(f"saved to {run_dir}\n  {saved}")
+        self._log(f"saved to {run_dir}\n  " + "  ".join(saved))
         self.status.configure(text="saved")
 
     def _session_data(self) -> dict:
+        def dump(edits: dict[int, Edit]) -> dict:
+            return {str(f): {f"{x},{y}": (list(v) if v is not None else None) for (x, y), v in e.items()} for f, e in edits.items() if e}
+
         data = self.current_config().model_dump()
         data["_input_path"] = str(self.input_path) if self.input_path else None
         data["_reference_mode"] = self.reference_mode.get()
         data["_reference_path"] = str(self.reference_path) if self.reference_path else None
         data["_shiny"] = bool(self.shiny.get())
-        data["_source_edits"] = {f"{x},{y}": (list(v) if v is not None else None) for (x, y), v in self.source_edits.items()}
-        data["_result_edits"] = {f"{x},{y}": (list(v) if v is not None else None) for (x, y), v in self.result_edits.items()}
+        data["_source_edits"] = dump(self.frame_source_edits)
+        data["_result_edits"] = dump(self.frame_result_edits)
+        data["_current_frame"] = self.current_frame
+        data["_frames_selected"] = sorted(self.frames_selected)
         data["_theme"] = self.theme_name.get()
         return data
 
@@ -1127,9 +1406,22 @@ class RevampApp(tk.Tk):
                 out[(pos[0], pos[1])] = tuple(v) if v is not None else None  # type: ignore[assignment]
             return out
 
-        self.source_edits = _edits(meta.get("_source_edits", {}))
-        self.result_edits = _edits(meta.get("_result_edits", {}))
+        def _frames(d: dict) -> dict[int, Edit]:
+            # Old sessions stored a flat pixel map (frame 0); new ones are keyed by frame index.
+            if d and all("," in k for k in d):
+                return {0: _edits(d)}
+            return {int(f): _edits(e) for f, e in d.items() if str(f).isdigit()}
+
+        self.frame_source_edits = {i: {} for i in range(self.frame_count)}
+        self.frame_result_edits = {i: {} for i in range(self.frame_count)}
+        self.frame_source_edits.update(_frames(meta.get("_source_edits", {})))
+        self.frame_result_edits.update(_frames(meta.get("_result_edits", {})))
         self.undo_stack = []
+        cur = int(meta.get("_current_frame", 0))
+        self.current_frame = cur if 0 <= cur < self.frame_count else 0
+        sel = {int(k) for k in meta.get("_frames_selected", []) if 0 <= int(k) < self.frame_count}
+        self.frames_selected = sel or set(range(self.frame_count))
+        self._update_frame_ui()
         if meta.get("_theme") in THEMES and meta["_theme"] != self.theme_name.get():
             self.theme_name.set(meta["_theme"])
             self.apply_theme()

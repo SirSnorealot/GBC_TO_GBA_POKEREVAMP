@@ -160,6 +160,9 @@ def normalize_geometry(
 
     ox = (canvas - sw) // 2 if config.anchor_x is None else int(np.clip(config.anchor_x, 0, canvas - sw))
     oy = (canvas - sh) // 2 if config.anchor_y is None else int(np.clip(config.anchor_y, 0, canvas - sh))
+    if config.canvas_origin is not None and scale == 1.0:
+        ox = int(np.clip(config.canvas_origin[0] + x0, 0, canvas - sw))
+        oy = int(np.clip(config.canvas_origin[1] + y0, 0, canvas - sh))
     out = np.full((canvas, canvas), -1, dtype=np.int32)
     out[oy : oy + sh, ox : ox + sw] = scaled
     return NormalizedSprite(

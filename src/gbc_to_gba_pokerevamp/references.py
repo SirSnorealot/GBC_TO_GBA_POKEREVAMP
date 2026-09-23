@@ -74,6 +74,8 @@ def list_references(
             if not d.exists():
                 continue
             for p in sorted(d.glob("*.png")):
+                if p.stem.endswith("_frames"):
+                    continue
                 if p.stem.endswith("_shiny") and not include_shiny:
                     continue
                 g, name = _game_from_stem(p.stem)
@@ -294,7 +296,7 @@ def canonical_name_from_path(path: Path) -> str:
     for prefix in GAME_PREFIXES:
         if stem.startswith(prefix):
             stem = stem[len(prefix) :]
-    for suffix in ("_shiny", "_revamped", "_front", "_crystal", "_gold", "_silver", "_yellow", "_rb", "_gbc", "_gb"):
+    for suffix in ("_frames", "_shiny", "_revamped", "_front", "_crystal", "_gold", "_silver", "_yellow", "_rb", "_gbc", "_gb"):
         if stem.endswith(suffix):
             stem = stem[: -len(suffix)]
     return stem

@@ -280,6 +280,34 @@ def _record(img: Image.Image, **kw) -> AssetRecord:
     return AssetRecord(width=img.width, height=img.height, mode=img.mode, opaque_color_count=int(n_colors), **kw)
 
 
+def frame_sheet(path: Path, generation: int, gen1_colors: list[tuple[int, int, int]] | None = None) -> tuple[Image.Image, int] | None:
+    """Full vertical stack of animation frames (all frames, uncropped), plus the frame count.
+
+    Crystal keeps every frame in front.png; Emerald keeps two frames in anim_front.png.
+    """
+    src = path
+    if generation >= 3:
+        anim = path.with_name("anim_front.png")
+        if not anim.exists():
+            return None
+        src = anim
+    img = Image.open(src)
+    img.load()
+    w, h = img.size
+    if h <= w or h % w != 0:
+        return None
+    n = h // w
+    if generation >= 3:
+        if img.mode != "P":
+            return None
+        idx = np.array(img)
+        rgba = np.array(img.convert("RGBA"))
+        rgba[..., 3] = np.where(idx == 0, 0, 255).astype(np.uint8)
+        rgba[idx == 0, :3] = 0
+        return Image.fromarray(rgba, "RGBA"), n
+    return img.convert("RGB"), n
+
+
 def bootstrap(update: bool = False, skip_clone: bool = False) -> dict:
     sources = load_sources()
     root = project_root()
@@ -340,6 +368,18 @@ def bootstrap(update: bool = False, skip_clone: bool = False) -> dict:
                 records.append(rec)
                 by_kind_game.setdefault((kind, game), {})[name] = rec.local_path
                 count += 1
+                if kind == "pokemon" and gen >= 2:
+                    sheet = frame_sheet(src, gen)
+                    if sheet is not None and sheet[1] > 1:
+                        fimg, nframes = sheet
+                        fdest = out_dir / f"{prefix}{name}_frames.png"
+                        fimg.save(fdest, format="PNG", optimize=False)
+                        records.append(_record(
+                            fimg, id=f"{kind}:{name}:{game}:frames", kind=kind, name=name, game_family=game, generation=gen,
+                            view="frames", source_repo=f"pret/{clone_dir}", source_commit=commit,
+                            source_path=src.relative_to(repo_root).as_posix(), local_path=fdest.relative_to(root).as_posix(),
+                            frame_cropped=False,
+                        ))
                 if kind == "pokemon" and gen >= 2:
                     shiny = shiny_variant(src, gen)
                     if shiny is not None:

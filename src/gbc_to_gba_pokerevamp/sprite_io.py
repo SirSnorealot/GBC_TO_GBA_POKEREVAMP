@@ -107,3 +107,48 @@ def scale_nearest(img: Image.Image, factor: int) -> Image.Image:
     if factor <= 1:
         return img.copy()
     return img.resize((img.width * factor, img.height * factor), Image.Resampling.NEAREST)
+
+
+def find_frame_sheet(path: Path) -> Path | None:
+    """Locate the frame sheet belonging to a sprite, if any.
+
+    Accepts either the single-frame file (looks for `<stem>_frames.png`) or a sheet itself
+    (a PNG whose height is a multiple of its width).
+    """
+    stem = path.stem
+    for suffix in ("_shiny",):
+        if stem.endswith(suffix):
+            stem = stem[: -len(suffix)]
+    sheet = path.with_name(stem + "_frames.png")
+    if sheet.exists():
+        return sheet
+    img = open_image(path)
+    if img.height > img.width and img.height % img.width == 0:
+        return path
+    return None
+
+
+def load_frames(sheet: Path, kind: Kind = "unknown", frame_size: int | None = None) -> list[SpriteImage]:
+    """Split a vertical frame sheet into one SpriteImage per frame (all share the sheet's size)."""
+    img = open_image(sheet)
+    fs = frame_size or img.width
+    n = max(1, img.height // fs)
+    frames: list[SpriteImage] = []
+    for i in range(n):
+        crop = img.crop((0, i * fs, img.width, (i + 1) * fs))
+        rgba, indices = image_to_rgba(crop)
+        opaque, bg_color, warnings = detect_background(rgba, indices)
+        if not opaque.any():
+            continue
+        ys, xs = np.nonzero(opaque)
+        rgba = rgba.copy()
+        rgba[..., 3] = np.where(opaque, 255, 0).astype(np.uint8)
+        rgba[~opaque, :3] = 0
+        colors = np.unique(rgba[opaque][:, :3], axis=0)
+        frames.append(SpriteImage(
+            image=Image.fromarray(rgba, "RGBA"), rgba=rgba, opaque_mask=opaque,
+            bbox=(int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1),
+            palette=[tuple(int(v) for v in c) for c in colors],  # type: ignore[misc]
+            background_color=bg_color, kind=kind, source_path=sheet, original_mode=img.mode, warnings=warnings,
+        ))
+    return frames

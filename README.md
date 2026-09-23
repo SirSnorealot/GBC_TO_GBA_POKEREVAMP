@@ -52,8 +52,8 @@ Dark theme by default (**Theme** button toggles). Left column = controls, right 
 | **Color mapping** | one row per source color: swatch, role, pixel count, what it currently becomes, and an **override** to send every pixel of that color to a chosen reference color, *Keep*, *Outline*, *Transparent* (fixes background mis-detection) or *Custom*. Clicking a source pixel with the Pick tool highlights its row. |
 | **Effects** | toggle positional recolor, outline rebuild, shading, 15-color limit; *Treat reference as same Pokémon* forces full color adoption for a hand-picked reference |
 | **Tuning** | shading / outline / highlight / hue-shift / reference-weight / cleanup strengths and light direction |
-| **Preview** | Source ❘ Result ❘ Reference; zoom or *fit*; checker / dark / light background; *Show* switches the result panel to any intermediate stage (flat recolor, outlined, shaded, level map…). Hovering shows the pixel coordinate and color. |
-| **Output** | *Save to output/* writes `output\<name>\revamped.png`, `compare.png`, `report.json` and `session.json`. *Save / Load session* stores every setting, the color map and all paint edits, so you can come back to a sprite later. |
+| **Preview** | Source ❘ Result ❘ Reference; zoom or *fit*; checker / dark / light background; *Show* switches the result panel to any intermediate stage (flat recolor, outlined, shaded, level map…). Hovering shows the pixel coordinate and color. **Frames**: Crystal sprites carry their extra battle frames (Emerald references carry two). Sprites with frames open in the **All frames** view: one row per frame, Source on the left and Result on the right, all editable at once — painting on any frame edits that frame and makes it current (blue outline). Untick *All frames* to work on one frame at a time with ◀ ▶; **Edits → all** copies the current frame's paint onto every frame. Every frame uses the same settings, color map and canvas placement; paint edits are per frame. **Frames in the output**: tick the frames you want (default all; **1+2** keeps just the first two, the usual Gen III pair; **all** resets). Unticked frames disappear from the preview and are left out of the saved sheet. |
+| **Output** | *Save to output/* writes `output\<name>\revamped.png` (the current frame), `compare.png`, `report.json` and `session.json`; when more than one frame is selected also `revamped_frames.png` (the chosen frames stacked vertically). *Save / Load session* stores every setting, the color map, the frame selection and all paint edits for every frame. |
 
 ## What the automatic pass does
 
@@ -69,7 +69,10 @@ detect background → color roles → center on 64×64 (no enlargement)
 Red/Blue/Yellow sprites are stored monochrome in the games; bootstrap applies each species'
 Super Game Boy palette so they arrive in color. Yellow's outside-the-outline anti-aliasing is
 folded into the outline. GBC dithering becomes solid shades; thick black masses become the
-official dark body color.
+official dark body color. Crystal's stacked battle frames are extracted as `<name>_frames.png`
+(frames stacked vertically, each as tall as the sheet is wide); Emerald's two-frame
+`anim_front.png` likewise. When you open `foo.png` the app looks for `foo_frames.png` next to
+it; any tall stacked PNG you draw yourself works the same way.
 
 Pixel-art rules are never broken: no resampling, no anti-aliasing, alpha is exactly 0 or 255.
 
