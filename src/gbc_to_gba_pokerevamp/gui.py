@@ -1388,7 +1388,7 @@ class RevampApp(tk.Tk):
             if self.outcome.used_refs:
                 images.append(load_sprite(self.outcome.used_refs[0]).image)
                 labels.append(f"reference: {self.outcome.used_refs[0].name}")
-            saved = ["revamped.png", "compare.png", "report.json", "session.json"]
+            saved = ["revamped.png", "compare.png", "session.json"]
             if self.shiny_outcome is not None:
                 save_rgba_png(self.shiny_outcome.final, run_dir / "revamped_shiny.png")
                 images.append(rgba_to_image(self.shiny_outcome.final))
@@ -1403,9 +1403,6 @@ class RevampApp(tk.Tk):
                     save_rgba_png(shiny_sheet, run_dir / "revamped_shiny_frames.png")
                     saved.append("revamped_shiny_frames.png")
             compare_sheet(images, labels, scale=4).save(run_dir / "compare.png", format="PNG")
-            rep = self.outcome.report
-            rep.output = str(run_dir / "revamped.png")
-            rep.write(run_dir / "report.json")
             self._write_session(run_dir / "session.json")
         except (OSError, SpriteLoadError) as exc:
             messagebox.showerror("Save failed", str(exc))
