@@ -26,7 +26,7 @@ from gbc_to_gba_pokerevamp.paths import project_root
 from gbc_to_gba_pokerevamp.references import canonical_name_from_path, list_references, normal_variant, shiny_variant
 from gbc_to_gba_pokerevamp.render import compare_sheet
 from gbc_to_gba_pokerevamp.revamp import RevampError, RevampOutcome, infer_kind, revamp_sprite, rgba_to_image
-from gbc_to_gba_pokerevamp.sprite_io import SpriteLoadError, find_frame_sheet, load_frames, load_sprite, save_rgba_png
+from gbc_to_gba_pokerevamp.sprite_io import SpriteLoadError, find_frame_sheet, frame_count, frame_ref, load_frames, load_sprite, save_rgba_png
 
 CANVAS = 64
 STAGES = [
@@ -166,7 +166,7 @@ class RevampApp(tk.Tk):
         self.fit_zoom = tk.BooleanVar(value=True)
         self.bg_mode = tk.StringVar(value="dark")
         self.stage_name = tk.StringVar(value=STAGES[0][0])
-        self.style_var = tk.StringVar(value="frlg")
+        self.style_var = tk.StringVar(value="emerald")
         self.kind_var = tk.StringVar(value="pokemon")
         self.tool = tk.StringVar(value="pencil")  # pick | pencil | fill | erase | erase_fill
         self.brush: RGB | None = (0, 0, 0)
@@ -331,7 +331,7 @@ class RevampApp(tk.Tk):
         kind.grid(row=1, column=1, sticky="w", padx=6, pady=(4, 0))
         kind.bind("<<ComboboxSelected>>", lambda e: (self._refresh_ref_list(), self.schedule()))
         ttk.Label(f, text="Style").grid(row=2, column=0, sticky="w", pady=(4, 0))
-        style = ttk.Combobox(f, textvariable=self.style_var, values=["frlg", "emerald", "gen3-mixed"], state="readonly", width=10)
+        style = ttk.Combobox(f, textvariable=self.style_var, values=["emerald", "frlg", "gen3-mixed"], state="readonly", width=10)
         style.grid(row=2, column=1, sticky="w", padx=6, pady=(4, 0))
         style.bind("<<ComboboxSelected>>", lambda e: (self._refresh_ref_list(), self.schedule()))
         ttk.Button(f, text="Theme", command=self.toggle_theme, style="Tool.TButton").grid(row=0, column=2, sticky="e")
@@ -539,6 +539,20 @@ class RevampApp(tk.Tk):
             return [normal_variant(self.reference_path)]
         return []
 
+    def _frame_refs(self, refs: list[Path], frame: int) -> list[Path]:
+        """Reference list for one source frame: the n-th chosen frame uses the n-th reference frame."""
+        if self.frame_count <= 1:
+            return refs
+        base = refs[0] if refs else self._base_ref()
+        if base is None:
+            return refs
+        n_ref = frame_count(base)
+        if n_ref <= 1:
+            return refs
+        chosen = sorted(self.frames_selected)
+        idx = chosen.index(frame) if frame in chosen else 0
+        return [frame_ref(base, min(idx, n_ref - 1))] + refs[1:]
+
     def _shiny_refs(self) -> list[Path]:
         """Shiny sibling of the base reference, when the toggle is on and one exists."""
         if not self.shiny.get() or self.reference_mode.get() == "none":
@@ -698,6 +712,8 @@ class RevampApp(tk.Tk):
         current = self.current_frame
         all_edits = {k: dict(v) for k, v in self.frame_source_edits.items()}
         n_frames = self.frame_count
+        frame_refs = {k: self._frame_refs(refs, k) for k in range(n_frames)}
+        frame_shiny_refs = {k: self._frame_refs(shiny_refs, k) if shiny_refs else [] for k in range(n_frames)}
 
         def work() -> None:
             try:
@@ -717,12 +733,12 @@ class RevampApp(tk.Tk):
                     apply_source_edits(sprite, edits)
                     edited = sprite.rgba.copy()
                     pinned = {pos: rgb for pos, rgb in edits.items() if rgb is not None}
-                    outcome = revamp_sprite(sprite, cfg, refs, input_name=f"{self.input_path} [frame {k}]", pinned_pixels=pinned)
+                    outcome = revamp_sprite(sprite, cfg, frame_refs[k], input_name=f"{self.input_path} [frame {k}]", pinned_pixels=pinned)
                     shiny_outcome = None
-                    if k == current and shiny_refs:
+                    if k == current and frame_shiny_refs[k]:
                         sprite2 = self._load_frame_sprite(k, cfg.kind)
                         apply_source_edits(sprite2, edits)
-                        shiny_outcome = revamp_sprite(sprite2, cfg, shiny_refs, input_name=str(self.input_path), pinned_pixels=pinned)
+                        shiny_outcome = revamp_sprite(sprite2, cfg, frame_shiny_refs[k], input_name=str(self.input_path), pinned_pixels=pinned)
                     self._results.put(("frame", (k, outcome, edited, shiny_outcome, k == current)))
                 self._results.put(("done", None))
             except (SpriteLoadError, RevampError, ValueError, IndexError) as exc:  # shown in the log, never crash the UI
@@ -798,31 +814,31 @@ class RevampApp(tk.Tk):
     def _panel_rows(self) -> list[list[tuple[str, int, Image.Image, str]]]:
         """Rows of (panel kind, frame, image, label).
 
-        Each row is Source | Result for one frame (reference on the first row). The all-frames
-        view shows one row per selected frame; otherwise only the current frame.
+        Each row is Source | Result for one frame, followed by that frame's reference (shown
+        whenever it differs from the row above). The all-frames view shows one row per
+        selected frame; otherwise only the current frame.
         """
         assert self.outcome is not None
-        oc = self.outcome
         rows: list[list[tuple[str, int, Image.Image, str]]] = []
-        ref_panel: tuple[str, int, Image.Image, str] | None = None
-        if oc.used_refs:
-            try:
-                ref_panel = ("reference", -1, load_sprite(oc.used_refs[0]).image, f"Reference: {oc.used_refs[0].stem}")
-            except SpriteLoadError:
-                ref_panel = None
         stage = self.stage_name.get()
         result_name = stage if stage != STAGES[0][0] else "Result"
         if self.view_all.get() and self.frame_count > 1:
             shown = [k for k in sorted(self.frames_selected) if k in self.frame_outcomes]
         else:
             shown = [self.current_frame]
+        last_ref: Path | None = None
         for k in shown:
             s, r = self._frame_images(k)
             tag = f" {k + 1}" if self.frame_count > 1 else ""
             cur = " <" if self.frame_count > 1 and k == self.current_frame and self.view_all.get() else ""
             row = [("source", k, s, f"Source{tag}{cur}"), ("result", k, r, f"{result_name}{tag}{cur}")]
-            if ref_panel and not rows:
-                row.append(ref_panel)
+            refs = self.frame_outcomes[k].used_refs
+            if refs and refs[0] != last_ref:
+                try:
+                    row.append(("reference", k, load_sprite(refs[0]).image, f"Reference: {refs[0].name}"))
+                    last_ref = refs[0]
+                except SpriteLoadError:
+                    pass
             rows.append(row)
         if self.shiny_outcome is not None:
             so = self.shiny_outcome
@@ -881,6 +897,7 @@ class RevampApp(tk.Tk):
             self.set_frame(min(self.frames_selected))
         else:
             self.redraw()
+        self.schedule()  # reference frames follow the chosen-frame order
 
     def set_frame(self, frame: int) -> None:
         if not (0 <= frame < self.frame_count):
@@ -980,8 +997,8 @@ class RevampApp(tk.Tk):
         if which == "result" and oc is not None:
             res = self.display_final_for(f)
             return res if res is not None else oc.final
-        if which == "reference" and self.outcome.used_refs:
-            return load_sprite(self.outcome.used_refs[0]).rgba
+        if which == "reference" and oc is not None and oc.used_refs:
+            return load_sprite(oc.used_refs[0]).rgba
         if which == "shiny_result" and self.shiny_outcome is not None:
             return self.shiny_outcome.final
         if which == "shiny_reference" and self.shiny_outcome is not None and self.shiny_outcome.used_refs:

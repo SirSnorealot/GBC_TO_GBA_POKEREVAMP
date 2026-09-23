@@ -15,6 +15,7 @@ from gbc_to_gba_pokerevamp.config import RevampConfig
 from gbc_to_gba_pokerevamp.models import RGB, ColorRole, ReferenceStyle, SpriteImage
 from gbc_to_gba_pokerevamp.palette import COOL_HUE, WARM_HUE, group_families
 from gbc_to_gba_pokerevamp.paths import project_root
+from gbc_to_gba_pokerevamp.sprite_io import frame_ref, split_frame_ref
 
 
 @dataclass
@@ -44,16 +45,18 @@ def _game_from_stem(stem: str) -> tuple[str, str]:
 
 def shiny_variant(path: Path) -> Path | None:
     """Path of the shiny-palette sibling of a reference (or source) sprite, if it was generated."""
-    if path.stem.endswith("_shiny"):
+    base, frame = split_frame_ref(path)
+    if base.stem.endswith("_shiny"):
         return path
-    cand = path.with_name(path.stem + "_shiny.png")
-    return cand if cand.exists() else None
+    cand = base.with_name(base.stem + "_shiny.png")
+    return frame_ref(cand, frame) if cand.exists() else None
 
 
 def normal_variant(path: Path) -> Path:
-    if path.stem.endswith("_shiny"):
-        cand = path.with_name(path.stem[: -len("_shiny")] + ".png")
-        return cand if cand.exists() else path
+    base, frame = split_frame_ref(path)
+    if base.stem.endswith("_shiny"):
+        cand = base.with_name(base.stem[: -len("_shiny")] + ".png")
+        return frame_ref(cand, frame) if cand.exists() else path
     return path
 
 
@@ -292,7 +295,7 @@ def reference_descriptors(entries: list[ReferenceEntry], root: Path | None = Non
 
 
 def canonical_name_from_path(path: Path) -> str:
-    stem = path.stem.lower()
+    stem = split_frame_ref(path)[0].stem.lower()
     for prefix in GAME_PREFIXES:
         if stem.startswith(prefix):
             stem = stem[len(prefix) :]

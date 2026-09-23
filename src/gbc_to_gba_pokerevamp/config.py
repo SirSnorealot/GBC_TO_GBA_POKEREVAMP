@@ -16,7 +16,7 @@ ReferenceMode = Literal["style", "palette"]
 
 class RevampConfig(BaseModel):
     kind: Literal["pokemon", "trainer", "unknown"] = "unknown"
-    style: Style = "frlg"
+    style: Style = "emerald"
     canvas_size: int = 64
     max_colors: int = 16  # including transparency -> 15 opaque
     preserve_pose: bool = True

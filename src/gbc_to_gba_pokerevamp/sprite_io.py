@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import numpy as np
@@ -15,14 +16,53 @@ class SpriteLoadError(Exception):
     pass
 
 
+_FRAME_REF = re.compile(r"^(.*\.png)#(\d+)$", re.I)
+
+
+def split_frame_ref(path: Path) -> tuple[Path, int]:
+    """`foo.png#2` -> (foo.png, 2); plain paths -> (path, 0)."""
+    m = _FRAME_REF.match(path.name)
+    if m:
+        return path.with_name(m.group(1)), int(m.group(2))
+    return path, 0
+
+
+def frame_ref(path: Path, frame: int) -> Path:
+    """Address one frame of a sprite's `<stem>_frames.png` sheet (frame 0 is the plain file)."""
+    base, _ = split_frame_ref(path)
+    return base.with_name(f"{base.name}#{frame}") if frame > 0 else base
+
+
+def sheet_for(path: Path) -> Path | None:
+    base, _ = split_frame_ref(path)
+    sheet = base.with_name(base.stem + "_frames.png")
+    return sheet if sheet.exists() else None
+
+
+def frame_count(path: Path) -> int:
+    sheet = sheet_for(path)
+    if sheet is None:
+        return 1
+    img = open_image(sheet)
+    return max(1, img.height // img.width)
+
+
 def open_image(path: Path) -> Image.Image:
-    if not path.exists():
-        raise SpriteLoadError(f"Input file not found: {path}")
+    base, frame = split_frame_ref(path)
+    if not base.exists():
+        raise SpriteLoadError(f"Input file not found: {base}")
     try:
-        img = Image.open(path)
+        img = Image.open(base)
         img.load()
+        sheet = sheet_for(base) if frame > 0 else None
+        if sheet is not None:
+            s = Image.open(sheet)
+            s.load()
+            fs = s.width
+            k = min(frame, max(1, s.height // fs) - 1)
+            img = s.crop((0, k * fs, fs, (k + 1) * fs))
     except (UnidentifiedImageError, OSError) as exc:
-        raise SpriteLoadError(f"Unsupported or corrupt image: {path} ({exc})") from exc
+        raise SpriteLoadError(f"Unsupported or corrupt image: {base} ({exc})") from exc
     return img
 
 

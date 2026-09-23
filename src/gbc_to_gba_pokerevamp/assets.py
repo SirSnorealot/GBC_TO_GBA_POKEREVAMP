@@ -221,7 +221,7 @@ def _read_jasc_pal(path: Path) -> list[tuple[int, int, int]] | None:
 _RGB2 = re.compile(r"RGB\s+(\d+)\s*,\s*(\d+)\s*,\s*(\d+)")
 
 
-def shiny_variant(path: Path, generation: int) -> Image.Image | None:
+def shiny_variant(path: Path, generation: int, all_frames: bool = False) -> Image.Image | None:
     """Build the shiny-palette version of a front sprite from the decomp's shiny.pal.
 
     Gen 3: the indexed PNG's palette is swapped for the 16 JASC entries (same index order).
@@ -234,7 +234,7 @@ def shiny_variant(path: Path, generation: int) -> Image.Image | None:
     img = Image.open(path)
     img.load()
     w, h = img.size
-    if h > w and h % w == 0:
+    if h > w and h % w == 0 and not all_frames:
         img = img.crop((0, 0, w, w))
     if generation >= 3:
         if img.mode != "P":
@@ -391,6 +391,11 @@ def bootstrap(update: bool = False, skip_clone: bool = False) -> dict:
                             source_path=src.relative_to(repo_root).as_posix() + " + shiny.pal",
                             local_path=sdest.relative_to(root).as_posix(), frame_cropped=cropped,
                         ))
+                        anim = src.with_name("anim_front.png")
+                        if gen >= 3 and anim.exists():
+                            shiny_frames = shiny_variant(anim, gen, all_frames=True)
+                            if shiny_frames is not None and shiny_frames.height > shiny_frames.width:
+                                shiny_frames.save(out_dir / f"{prefix}{name}_shiny_frames.png", format="PNG", optimize=False)
             console.print(f"  {game}: copied {count} {kind} front sprites")
 
     manifests = data / "manifests"
