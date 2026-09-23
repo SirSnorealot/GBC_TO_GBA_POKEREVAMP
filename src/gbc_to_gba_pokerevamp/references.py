@@ -60,6 +60,18 @@ def normal_variant(path: Path) -> Path:
     return path
 
 
+def back_variant(path: Path) -> Path | None:
+    """Back sprite belonging to a (front) reference, if the bootstrap produced one."""
+    base, _ = split_frame_ref(path)
+    stem = base.stem
+    if stem.endswith("_shiny"):
+        stem = stem[: -len("_shiny")]
+    if stem.endswith("_back"):
+        return base
+    cand = base.with_name(stem + "_back.png")
+    return cand if cand.exists() else None
+
+
 def list_references(
     kind: str | None = None, game: str | None = None, root: Path | None = None, era: str = "gba", include_shiny: bool = False
 ) -> list[ReferenceEntry]:
@@ -77,7 +89,7 @@ def list_references(
             if not d.exists():
                 continue
             for p in sorted(d.glob("*.png")):
-                if p.stem.endswith("_frames"):
+                if p.stem.endswith(("_frames", "_back")):
                     continue
                 if p.stem.endswith("_shiny") and not include_shiny:
                     continue
@@ -299,7 +311,7 @@ def canonical_name_from_path(path: Path) -> str:
     for prefix in GAME_PREFIXES:
         if stem.startswith(prefix):
             stem = stem[len(prefix) :]
-    for suffix in ("_frames", "_shiny", "_revamped", "_front", "_crystal", "_gold", "_silver", "_yellow", "_rb", "_gbc", "_gb"):
+    for suffix in ("_frames", "_shiny", "_back", "_revamped", "_front", "_crystal", "_gold", "_silver", "_yellow", "_rb", "_gbc", "_gb"):
         if stem.endswith(suffix):
             stem = stem[: -len(suffix)]
     return stem

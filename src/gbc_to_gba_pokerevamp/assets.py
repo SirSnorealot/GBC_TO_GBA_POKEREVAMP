@@ -396,6 +396,24 @@ def bootstrap(update: bool = False, skip_clone: bool = False) -> dict:
                             shiny_frames = shiny_variant(anim, gen, all_frames=True)
                             if shiny_frames is not None and shiny_frames.height > shiny_frames.width:
                                 shiny_frames.save(out_dir / f"{prefix}{name}_shiny_frames.png", format="PNG", optimize=False)
+                back = src.with_name("back.png")
+                if kind == "pokemon" and gen >= 3 and back.exists():
+                    try:
+                        bimg, _ = prepare_image(back, gen)
+                    except (OSError, ValueError):
+                        bimg = None
+                    if bimg is not None:
+                        bdest = out_dir / f"{prefix}{name}_back.png"
+                        bimg.save(bdest, format="PNG", optimize=False)
+                        records.append(_record(
+                            bimg, id=f"{kind}:{name}:{game}:back", kind=kind, name=name, game_family=game, generation=gen,
+                            view="back", source_repo=f"pret/{clone_dir}", source_commit=commit,
+                            source_path=back.relative_to(repo_root).as_posix(), local_path=bdest.relative_to(root).as_posix(),
+                            frame_cropped=False,
+                        ))
+                        bshiny = shiny_variant(back, gen)
+                        if bshiny is not None:
+                            bshiny.save(out_dir / f"{prefix}{name}_back_shiny.png", format="PNG", optimize=False)
             console.print(f"  {game}: copied {count} {kind} front sprites")
 
     manifests = data / "manifests"

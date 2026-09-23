@@ -23,10 +23,10 @@ from gbc_to_gba_pokerevamp.colorspace import rgb_to_lch
 from gbc_to_gba_pokerevamp.config import RevampConfig
 from gbc_to_gba_pokerevamp.models import RGB, SpriteImage
 from gbc_to_gba_pokerevamp.paths import project_root
-from gbc_to_gba_pokerevamp.references import canonical_name_from_path, list_references, normal_variant, shiny_variant
+from gbc_to_gba_pokerevamp.references import back_variant, canonical_name_from_path, list_references, normal_variant, shiny_variant
 from gbc_to_gba_pokerevamp.render import compare_sheet
 from gbc_to_gba_pokerevamp.revamp import RevampError, RevampOutcome, infer_kind, revamp_sprite, rgba_to_image
-from gbc_to_gba_pokerevamp.sprite_io import SpriteLoadError, find_frame_sheet, frame_count, frame_ref, load_frames, load_sprite, save_rgba_png
+from gbc_to_gba_pokerevamp.sprite_io import SpriteLoadError, find_frame_sheet, frame_count, frame_ref, load_frames, load_sprite, save_rgba_png, split_frame_ref
 
 CANVAS = 64
 STAGES = [
@@ -69,7 +69,8 @@ THEMES = {
 }
 
 Edit = dict[tuple[int, int], RGB | None]  # pixel -> color, None = transparent
-PICK_ONLY = {"reference", "shiny_result", "shiny_reference"}  # panels you can pick colors from but not paint on
+PICK_ONLY = {"reference", "shiny_result", "shiny_reference", "back_reference", "shiny_back_reference"}  # pick colors from, never paint on
+Panel = tuple[str, int, Image.Image, str]  # (panel kind, frame, image, label)
 
 
 def _hex(rgb: RGB) -> str:
@@ -158,10 +159,10 @@ class RevampApp(tk.Tk):
         self.frame_edited_source: dict[int, np.ndarray] = {}
         self.frame_source_edits: dict[int, Edit] = {0: {}}
         self.frame_result_edits: dict[int, Edit] = {0: {}}
-        self.shiny_outcome: RevampOutcome | None = None
+        self.frame_shiny_outcomes: dict[int, RevampOutcome] = {}
         self.reference_mode = tk.StringVar(value="auto")
         self.reference_path: Path | None = None
-        self.shiny = tk.BooleanVar(value=False)
+        self.shiny = tk.BooleanVar(value=True)
         self.zoom = tk.IntVar(value=6)
         self.fit_zoom = tk.BooleanVar(value=True)
         self.bg_mode = tk.StringVar(value="dark")
@@ -195,6 +196,10 @@ class RevampApp(tk.Tk):
     @property
     def outcome(self) -> RevampOutcome | None:
         return self.frame_outcomes.get(self.current_frame)
+
+    @property
+    def shiny_outcome(self) -> RevampOutcome | None:
+        return self.frame_shiny_outcomes.get(self.current_frame)
 
     @property
     def edited_source(self) -> np.ndarray | None:
@@ -377,7 +382,7 @@ class RevampApp(tk.Tk):
         self.ref_list = self._reg(tk.Listbox(f, height=5, exportselection=False, relief="flat"), "list")
         self.ref_list.pack(fill="x", pady=(4, 0))
         self.ref_list.bind("<<ListboxSelect>>", self._on_ref_selected)
-        self.shiny_check = ttk.Checkbutton(f, text="Also show the shiny version (second preview row)", variable=self.shiny, command=self.schedule)
+        self.shiny_check = ttk.Checkbutton(f, text="Show the shiny version next to each result", variable=self.shiny, command=self.schedule)
         self.shiny_check.pack(anchor="w", pady=(4, 0))
         self.ref_label = ttk.Label(f, text="", style="Muted.TLabel")
         self.ref_label.pack(anchor="w")
@@ -599,7 +604,7 @@ class RevampApp(tk.Tk):
         self.current_frame = 0
         self.frames_selected = set(range(self.frame_count))
         self.view_all.set(self.frame_count > 1)
-        self.frame_outcomes, self.frame_edited_source = {}, {}
+        self.frame_outcomes, self.frame_edited_source, self.frame_shiny_outcomes = {}, {}, {}
         self.frame_source_edits = {i: {} for i in range(self.frame_count)}
         self.frame_result_edits = {i: {} for i in range(self.frame_count)}
         self.undo_stack = []
@@ -735,7 +740,7 @@ class RevampApp(tk.Tk):
                     pinned = {pos: rgb for pos, rgb in edits.items() if rgb is not None}
                     outcome = revamp_sprite(sprite, cfg, frame_refs[k], input_name=f"{self.input_path} [frame {k}]", pinned_pixels=pinned)
                     shiny_outcome = None
-                    if k == current and frame_shiny_refs[k]:
+                    if frame_shiny_refs[k]:
                         sprite2 = self._load_frame_sprite(k, cfg.kind)
                         apply_source_edits(sprite2, edits)
                         shiny_outcome = revamp_sprite(sprite2, cfg, frame_shiny_refs[k], input_name=str(self.input_path), pinned_pixels=pinned)
@@ -776,8 +781,11 @@ class RevampApp(tk.Tk):
     def _frame_finished(self, frame: int, outcome: RevampOutcome, edited_source: np.ndarray, shiny_outcome: RevampOutcome | None, is_current: bool) -> None:
         self.frame_outcomes[frame] = outcome
         self.frame_edited_source[frame] = edited_source
+        if shiny_outcome is not None:
+            self.frame_shiny_outcomes[frame] = shiny_outcome
+        else:
+            self.frame_shiny_outcomes.pop(frame, None)
         if is_current:
-            self.shiny_outcome = shiny_outcome
             rep = outcome.report
             frame_note = f"  frame {frame + 1}/{self.frame_count}" if self.frame_count > 1 else ""
             self.status.configure(text=f"{rep.source_opaque_colors} → {rep.target_opaque_colors} colors" + ("  + shiny" if shiny_outcome else "") + frame_note)
@@ -811,48 +819,65 @@ class RevampApp(tk.Tk):
             result = oc.stages.get(stage_key, oc.final)
         return Image.fromarray(np.ascontiguousarray(src), "RGBA"), Image.fromarray(np.ascontiguousarray(result), "RGBA")
 
-    def _panel_rows(self) -> list[list[tuple[str, int, Image.Image, str]]]:
-        """Rows of (panel kind, frame, image, label).
+    def _panel_rows(self) -> list[list[Panel | None]]:
+        """Rows of (panel kind, frame, image, label); None keeps a column empty.
 
-        Each row is Source | Result for one frame, followed by that frame's reference (shown
-        whenever it differs from the row above). The all-frames view shows one row per
-        selected frame; otherwise only the current frame.
+        Each frame is one row: Source | Result | Shiny result | Reference | Shiny reference
+        (the references only when they differ from the row above). A last row shows the
+        reference's back sprites under the reference columns. The all-frames view shows one
+        row per selected frame; otherwise only the current frame.
         """
         assert self.outcome is not None
-        rows: list[list[tuple[str, int, Image.Image, str]]] = []
+        rows: list[list[Panel | None]] = []
         stage = self.stage_name.get()
+        stage_key = dict(STAGES).get(stage, "09_final")
         result_name = stage if stage != STAGES[0][0] else "Result"
         if self.view_all.get() and self.frame_count > 1:
             shown = [k for k in sorted(self.frames_selected) if k in self.frame_outcomes]
         else:
             shown = [self.current_frame]
+        show_shiny = self.shiny.get() and any(k in self.frame_shiny_outcomes for k in shown)
+        ref_col = 3 if show_shiny else 2
+
+        def image_panel(which: str, frame: int, path: Path, label: str) -> Panel | None:
+            n = split_frame_ref(path)[1]
+            try:
+                return (which, frame, load_sprite(path).image, label + (f" f{n + 1}" if n else ""))
+            except SpriteLoadError:
+                return None
+
         last_ref: Path | None = None
+        last_shiny_ref: Path | None = None
         for k in shown:
             s, r = self._frame_images(k)
             tag = f" {k + 1}" if self.frame_count > 1 else ""
             cur = " <" if self.frame_count > 1 and k == self.current_frame and self.view_all.get() else ""
-            row = [("source", k, s, f"Source{tag}{cur}"), ("result", k, r, f"{result_name}{tag}{cur}")]
+            row: list[Panel | None] = [("source", k, s, f"Source{tag}{cur}"), ("result", k, r, f"{result_name}{tag}{cur}")]
+            so = self.frame_shiny_outcomes.get(k) if self.shiny.get() else None
+            if show_shiny:
+                if so is not None:
+                    shiny_result = so.stages.get(stage_key, so.final)
+                    row.append(("shiny_result", k, Image.fromarray(np.ascontiguousarray(shiny_result), "RGBA"), f"Shiny{tag}"))
+                else:
+                    row.append(None)
             refs = self.frame_outcomes[k].used_refs
             if refs and refs[0] != last_ref:
-                try:
-                    row.append(("reference", k, load_sprite(refs[0]).image, f"Reference: {refs[0].name}"))
-                    last_ref = refs[0]
-                except SpriteLoadError:
-                    pass
+                row.append(image_panel("reference", k, refs[0], "Reference"))
+                last_ref = refs[0]
+            else:
+                row.append(None)
+            if so is not None and so.used_refs and so.used_refs[0] != last_shiny_ref:
+                row.append(image_panel("shiny_reference", k, so.used_refs[0], "Shiny reference"))
+                last_shiny_ref = so.used_refs[0]
             rows.append(row)
-        if self.shiny_outcome is not None:
-            so = self.shiny_outcome
-            stage_key = dict(STAGES).get(stage, "09_final")
-            shiny_result = so.stages.get(stage_key, so.final)
-            row2: list[tuple[str, int, Image.Image, str]] = [
-                ("shiny_result", self.current_frame, Image.fromarray(np.ascontiguousarray(shiny_result), "RGBA"), f"Shiny result{' ' + str(self.current_frame + 1) if self.frame_count > 1 else ''} (pick only)"),
-            ]
-            if so.used_refs:
-                try:
-                    row2.append(("shiny_reference", -1, load_sprite(so.used_refs[0]).image, f"Shiny reference: {so.used_refs[0].stem}"))
-                except SpriteLoadError:
-                    pass
-            rows.append(row2)
+        first_refs = self.frame_outcomes[shown[0]].used_refs if shown else []
+        back = back_variant(first_refs[0]) if first_refs else None
+        if back is not None:
+            row = [None] * ref_col + [image_panel("back_reference", -1, back, "Back")]
+            shiny_back = shiny_variant(back) if self.shiny.get() else None
+            if shiny_back is not None:
+                row.append(image_panel("shiny_back_reference", -1, shiny_back, "Shiny back"))
+            rows.append(row)
         return rows
 
     # ------------------------------------------------------------------ frames
@@ -909,8 +934,6 @@ class RevampApp(tk.Tk):
             self._rebuild_color_rows()
             self._rebuild_palettes()
             self.redraw()
-            if self.shiny.get():
-                self.schedule()  # the shiny row is computed for the current frame only
         else:
             self.schedule()
 
@@ -959,10 +982,12 @@ class RevampApp(tk.Tk):
         text_fill = (230, 230, 230) if (mode == "dark" or (mode == "checker" and self.theme_name.get() == "dark")) else (20, 20, 20)
         for r, panels in enumerate(rows):
             y_top = pad + r * row_h
-            # The shiny row lines up under the Result column.
-            shiny_row = bool(panels) and panels[0][0] == "shiny_result"
-            x = pad + (cw + pad) if shiny_row else pad
-            for which, frame, img, label in panels:
+            x = pad
+            for panel in panels:
+                if panel is None:
+                    x += cw + pad
+                    continue
+                which, frame, img, label = panel
                 canvas_img = Image.new("RGBA", (CANVAS, CANVAS), (0, 0, 0, 0))
                 ox, oy = (CANVAS - img.width) // 2, (CANVAS - img.height) // 2
                 canvas_img.paste(img, (ox, oy), img)
@@ -999,10 +1024,15 @@ class RevampApp(tk.Tk):
             return res if res is not None else oc.final
         if which == "reference" and oc is not None and oc.used_refs:
             return load_sprite(oc.used_refs[0]).rgba
-        if which == "shiny_result" and self.shiny_outcome is not None:
-            return self.shiny_outcome.final
-        if which == "shiny_reference" and self.shiny_outcome is not None and self.shiny_outcome.used_refs:
-            return load_sprite(self.shiny_outcome.used_refs[0]).rgba
+        if which == "shiny_result" and f in self.frame_shiny_outcomes:
+            return self.frame_shiny_outcomes[f].final
+        if which == "shiny_reference" and f in self.frame_shiny_outcomes and self.frame_shiny_outcomes[f].used_refs:
+            return load_sprite(self.frame_shiny_outcomes[f].used_refs[0]).rgba
+        if which in ("back_reference", "shiny_back_reference") and self.outcome.used_refs:
+            back = back_variant(self.outcome.used_refs[0])
+            if back is not None and which == "shiny_back_reference":
+                back = shiny_variant(back)
+            return load_sprite(back).rgba if back is not None else None
         return None
 
     def _on_motion(self, event: tk.Event) -> None:
@@ -1026,8 +1056,6 @@ class RevampApp(tk.Tk):
             self._update_edit_label()
             self._rebuild_color_rows()
             self._rebuild_palettes()
-            if self.shiny.get():
-                self.schedule()
 
     def _on_press(self, event: tk.Event) -> None:
         hit = self._hit(event.x, event.y)
@@ -1352,6 +1380,10 @@ class RevampApp(tk.Tk):
                 sheet = np.concatenate(finals, axis=0)  # type: ignore[arg-type]
                 save_rgba_png(sheet, run_dir / "revamped_frames.png")
                 saved.append("revamped_frames.png")
+                if all(k in self.frame_shiny_outcomes for k in chosen):
+                    shiny_sheet = np.concatenate([self.frame_shiny_outcomes[k].final for k in chosen], axis=0)
+                    save_rgba_png(shiny_sheet, run_dir / "revamped_shiny_frames.png")
+                    saved.append("revamped_shiny_frames.png")
             compare_sheet(images, labels, scale=4).save(run_dir / "compare.png", format="PNG")
             rep = self.outcome.report
             rep.output = str(run_dir / "revamped.png")
@@ -1412,7 +1444,7 @@ class RevampApp(tk.Tk):
         ref = meta.get("_reference_path")
         self.reference_path = Path(ref) if ref else None
         self.ref_label.configure(text=self.reference_path.name if self.reference_path else "")
-        self.shiny.set(bool(meta.get("_shiny", False)))
+        self.shiny.set(bool(meta.get("_shiny", True)))
 
         def _edits(d: dict) -> Edit:
             out: Edit = {}
