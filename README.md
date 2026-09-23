@@ -1,118 +1,89 @@
 # PokeRevamp Assistant
 
-An interactive editor for turning Game Boy / Game Boy Color Pokémon battle sprites
-(Red/Blue, Yellow, Gold, Silver, Crystal) into Game Boy Advance-style revamps
-(FireRed/LeafGreen/Emerald look: 64×64 canvas, ≤15 colors + transparency, colored
-outlines, real shading).
+An editor for turning Game Boy / Game Boy Color Pokémon sprites (Red/Blue, Yellow, Gold,
+Silver, Crystal) into Game Boy Advance-style revamps (Emerald / FireRed look: 64×64,
+≤15 colors, colored outlines, real shading).
 
-It is an **assistant, not a converter**. An automatic pass gives you a starting point — the
-official Gen III sprite's colors laid onto your sprite, a rebuilt outline, synthesized
-shading — and then you finish it by hand, live: pick any color from the reference and paint
-pixels or whole regions on the original or on the result, remap a source color wholesale,
-toggle each effect, drag the sliders. Everything updates in the preview as you work.
+It is an **assistant, not a converter**. An automatic pass lays the official Gen III colors,
+outline and shading onto your sprite; you then finish it by hand with the paint tools while
+the preview updates live.
 
-## Requirements
+## Screenshots
 
-- Python 3.11 or newer (tkinter is included with the standard Windows/macOS installers)
-- Git (only for the one-time reference download)
+![Ditto](docs/screenshots/ditto.png)
+
+![Quagsire](docs/screenshots/quagsire.png)
 
 ## Setup
 
+Needs Python 3.11+ (with tkinter, included in the standard installers) and Git.
+
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1          # macOS/Linux: source .venv/bin/activate
-python -m pip install --upgrade pip
+.\.venv\Scripts\Activate.ps1
 pip install -e .
-gbc_to_gba_pokerevamp --bootstrap     # one time: downloads the Gen I–III sprites (a few minutes)
+gbc_to_gba_pokerevamp --bootstrap     # one time: downloads the Gen I–III sprites
 ```
-
-`--bootstrap` shallow-clones the pret decompilation repositories into the gitignored
-`vendor/` folder and copies only the front battle sprites into the gitignored
-`data/references/`. You can also do this later from inside the app (**Download refs…**).
 
 ## Run
 
 ```powershell
-gbc_to_gba_pokerevamp                          # open the editor
-gbc_to_gba_pokerevamp .\input\crystal_totodile.png   # open with a sprite loaded
+gbc_to_gba_pokerevamp                              # open the editor
+gbc_to_gba_pokerevamp .\input\crystal_totodile.png # open with a sprite loaded
 ```
-
-There are ~1,100 ready-made inputs under `data\references\gbc\pokemon\` and `...\trainers\`
-(`rb_`, `yellow_`, `gold_`, `silver_`, `crystal_` prefixes), or drop your own PNG into `input\`.
 
 ## The editor
 
-Dark theme by default (**Theme** button toggles). Left column = sprite, source library, reference and output; center = preview; right column = brush colors, color mapping, effects and tuning.
+**Left column**
 
-| panel | what it does |
-|---|---|
-| **Sprite** | open any PNG; kind (pokemon / trainer) and style (emerald by default, frlg, or gen3-mixed) |
-| **Gen III reference** | *Auto* (same species when the file name matches, else shape-alikes for shading style only), *None* (keep the source's own colors), or *Pick* from the searchable list / browse to any PNG. **Shiny** (on by default) also revamps every frame against the reference's shiny palette (from the decomp's `shiny.pal`) and shows it beside the result. *Download refs…* fetches the sprite corpus. |
-| **Paint** | **Pick color** (click any panel, including the reference), **Pencil** (click / drag), **Fill region** (click recolors the connected same-color area), **Undo** (per stroke). The palette shows every color of the reference (one row per color region, dark → light), the source colors and the result colors; *Custom…* and *Transparent* too. Paint on the **Source** or on the **Result** — either way, pixels you paint are kept exactly as painted; the automatic coloring and shading never touch them. Right-click a painted pixel to erase that edit. |
-| **Color mapping** | one row per source color: swatch, role, pixel count, what it currently becomes, and an **override** to send every pixel of that color to a chosen reference color, *Keep*, *Outline*, *Transparent* (fixes background mis-detection) or *Custom*. Clicking a source pixel with the Pick tool highlights its row. |
-| **Effects** | toggle positional recolor, outline rebuild, shading, 15-color limit; *Treat reference as same Pokémon* forces full color adoption for a hand-picked reference |
-| **Tuning** | shading / outline / highlight / hue-shift / reference-weight / cleanup strengths and light direction |
-| **Preview** | Each frame is one row: Source ❘ Result ❘ Shiny ❘ Reference ❘ Shiny reference, and a last row shows the reference's **Back** and **Shiny back** sprites (every reference panel can be color-picked from). Zoom or *fit*; checker / dark / light background; *Show* switches the result panel to any intermediate stage (flat recolor, outlined, shaded, level map…). Hovering shows the pixel coordinate and color. **Frames**: Crystal sprites carry their extra battle frames; Emerald references carry two, and both are used — the first chosen frame is revamped against Emerald's first frame, the second against its second (the reference shown on each row is the one that frame used). Sprites with frames open in the **All frames** view: one row per frame, Source on the left and Result on the right, all editable at once — painting on any frame edits that frame and makes it current (blue outline). Untick *All frames* to work on one frame at a time with ◀ ▶; **Paint on all frames** (checkbox) makes every stroke, fill, erase and right-click erase apply to all frames at once (undo reverts them everywhere); leave it off to paint one frame at a time. Every frame uses the same settings, color map and canvas placement; paint edits are per frame. **Frames in the output**: tick the frames you want (default all; **1+2** keeps just the first two, the usual Gen III pair; **all** resets). Unticked frames disappear from the preview and are left out of the saved sheet. |
-| **Output** | *Save to output/* writes `output\<name>\revamped.png` (the current frame), `revamped_shiny.png`, `compare.png` and `session.json`; when more than one frame is selected also `revamped_frames.png` and `revamped_shiny_frames.png` (the chosen frames stacked vertically). `session.json` (also *Save / Load session…*) stores every setting, the color map, the frame selection and all paint edits for every frame, so a sprite can be reopened and continued later. |
+- **Sprite** – open a PNG; kind (pokemon / trainer) and style (emerald, frlg, gen3-mixed).
+- **Source library** – every GB/GBC sprite from the games; double-click to open. `+` = has extra frames.
+- **Gen III reference** – *Auto* picks the same species; *Pick* lets you choose any sprite; *None* keeps the source colors. Shiny is shown by default.
+- **Output** – *Save to output/* writes `output\<name>\revamped.png`, `revamped_shiny.png`, `compare.png` and `session.json` (plus `revamped_frames.png` / `revamped_shiny_frames.png` when several frames are selected). *Load session…* restores everything, including your paint edits.
 
-## What the automatic pass does
+**Center – toolbar and preview**
 
-```text
-detect background → color roles → center on 64×64 (no enlargement)
-→ pick reference → RECOLOR (same species: every body pixel → the official color region at
-  that position; else hue-matched families) → manual color map
-→ outline rebuild (1 px; black only in shadow, dark local color elsewhere, highlight tone on
-  lit edges) → shading (each body part lit as its own rounded form, in the reference's
-  proportions) → stray-pixel cleanup → ≤15 colors
-```
+- Tools: **Pick** (I), **Pencil** (B), **Fill region** (G), **Eraser** (E), **Erase region** (X), **Undo** (Ctrl+Z). **Custom…** picks any brush color; **Transparent** makes the brush erase.
+- Each frame is a row: Source ❘ Result ❘ Shiny ❘ Reference ❘ Shiny reference. The last row shows the reference's back sprites. Every reference panel can be color-picked from.
+- Paint on the Source or the Result. Painted pixels are kept exactly as painted; the automatic pass never touches them. Right-click a painted pixel to remove that edit.
+- **Frame row** (multi-frame sprites): step frames with ◀ ▶, **All frames** shows every frame at once, **Paint on all frames** applies each stroke to every frame, **In output** picks which frames are exported (**1+2** = the usual Gen III pair). Frame *n* is revamped against Emerald's frame *n*.
+- *Show* switches the result to an intermediate stage; zoom / fit / background as you like.
 
-Red/Blue/Yellow sprites are stored monochrome in the games; bootstrap applies each species'
-Super Game Boy palette so they arrive in color. Yellow's outside-the-outline anti-aliasing is
-folded into the outline. GBC dithering becomes solid shades; thick black masses become the
-official dark body color. Crystal's stacked battle frames are extracted as `<name>_frames.png`
-(frames stacked vertically, each as tall as the sheet is wide); Emerald's two-frame
-`anim_front.png` likewise. When you open `foo.png` the app looks for `foo_frames.png` next to
-it; any tall stacked PNG you draw yourself works the same way.
+**Right column**
 
-Pixel-art rules are never broken: no resampling, no anti-aliasing, alpha is exactly 0 or 255.
+- **Brush colors** – the reference's colors (one row per body region, dark → light), the source colors and the result colors. Click to set the brush.
+- **Color mapping** – one row per source color; override where *all* pixels of that color go (a reference color, Keep, Outline, Transparent, Custom).
+- **Effects** – toggle recolor, outline rebuild, shading, palette lock, 15-color limit.
+- **Tuning** – shading / outline / highlight / hue-shift / cleanup strengths and light direction.
 
-## Limitations
+## Notes
 
-- The pose is never redrawn. The sprite stays in its GBC pose; only colors, outline and
-  shading change. Where the official Gen III sprite has a different pose, position-based
-  recoloring can put a color on the wrong part — that is what the paint tools are for.
-- A color the source does not have cannot be inferred (Yellow Pikachu has no red cheeks).
-  Paint it.
-- Trainers get hue-matched colors only; their Gen III redesigns rarely share a layout.
+- The pose is never redrawn — only colors, outline and shading change. Where the Gen III sprite has a different pose, some colors land on the wrong part; that is what the paint tools are for.
+- Colors the source does not have can't be inferred (Yellow Pikachu has no red cheeks). Paint them.
+- Frames: Crystal sprites carry their battle frames, Emerald references two. They are stored as `<name>_frames.png` (frames stacked vertically). Any tall stacked PNG you make yourself works the same way when placed next to your sprite.
+- Pixel-art rules are never broken: no resampling, no anti-aliasing, alpha is exactly 0 or 255.
 
 ## Data notice
 
-PokeRevamp Assistant does not include Pokémon game ROMs or bundled game graphics. The
-bootstrap clones public source-decompilation repositories into a local, gitignored directory
-for research and personal comparison. Users are responsible for complying with applicable
-rights, licenses, and laws for any assets they use or redistribute. Not affiliated with or
-endorsed by Nintendo, Game Freak, or The Pokémon Company.
-
-Reference graphics come from the pret decompilation projects:
-[pokered](https://github.com/pret/pokered), [pokeyellow](https://github.com/pret/pokeyellow),
+No ROMs or game graphics are bundled. The bootstrap clones the public pret decompilations
+([pokered](https://github.com/pret/pokered), [pokeyellow](https://github.com/pret/pokeyellow),
 [pokegold](https://github.com/pret/pokegold), [pokecrystal](https://github.com/pret/pokecrystal),
-[pokefirered](https://github.com/pret/pokefirered), [pokeemerald](https://github.com/pret/pokeemerald).
-Every copied image is recorded in `data/manifests/sources.json` with repository, commit and path.
+[pokefirered](https://github.com/pret/pokefirered), [pokeemerald](https://github.com/pret/pokeemerald))
+into a local, gitignored folder for personal use. You are responsible for complying with the
+applicable rights and licenses for anything you use or share. Not affiliated with or endorsed
+by Nintendo, Game Freak, or The Pokémon Company.
 
 ## Project layout
 
 ```text
-assets/manifests/sources.json   acquisition rules + name normalization
-scripts/bootstrap_assets.py     same as `gbc_to_gba_pokerevamp --bootstrap`
 src/gbc_to_gba_pokerevamp/
-  cli.py        launcher (--bootstrap, --version)
   gui.py        the editor (tkinter)
-  revamp.py     automatic pass: revamp_sprite() -> final image + every stage
+  revamp.py     automatic pass
   recolor.py    same-species positional recolor
-  palette.py    color families, shade ramps, color-limit enforcement
+  palette.py    color families, shade ramps, color limit
   outline.py    outline rebuild        shading.py   shade synthesis
   analyze.py    background, roles      normalize.py canvas placement
-  references.py reference indexing / style extraction / ranking
-  assets.py     sprite acquisition     config.py    RevampConfig
-data/ vendor/ output/ input/          gitignored local data
+  references.py reference indexing     assets.py    sprite download
+docs/screenshots/                       README images
+data/ vendor/ output/ input/            gitignored local data
 ```

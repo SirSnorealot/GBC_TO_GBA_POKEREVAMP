@@ -487,20 +487,24 @@ class RevampApp(tk.Tk):
         st.bind("<<ComboboxSelected>>", lambda e: self.redraw())
         self.status = ttk.Label(bar, text="", style="Muted.TLabel")
         self.status.pack(side="right")
-        ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=8)
-        self.frame_prev = ttk.Button(bar, text="◀", width=3, style="Tool.TButton", command=lambda: self.set_frame(self.current_frame - 1))
+        # Frame row (only shown for sprites with more than one frame).
+        self.frame_bar = ttk.Frame(right)
+        self.frame_bar.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(2, 0))
+        fb = self.frame_bar
+        self.frame_prev = ttk.Button(fb, text="◀", width=3, style="Tool.TButton", command=lambda: self.set_frame(self.current_frame - 1))
         self.frame_prev.pack(side="left")
-        self.frame_label = ttk.Label(bar, text="Frame 1/1", width=11, anchor="center")
+        self.frame_label = ttk.Label(fb, text="Frame 1/1", width=11, anchor="center")
         self.frame_label.pack(side="left")
-        self.frame_next = ttk.Button(bar, text="▶", width=3, style="Tool.TButton", command=lambda: self.set_frame(self.current_frame + 1))
+        self.frame_next = ttk.Button(fb, text="▶", width=3, style="Tool.TButton", command=lambda: self.set_frame(self.current_frame + 1))
         self.frame_next.pack(side="left")
-        self.view_all_check = ttk.Checkbutton(bar, text="All frames", variable=self.view_all, command=self.redraw)
-        self.view_all_check.pack(side="left", padx=(6, 0))
+        self.view_all_check = ttk.Checkbutton(fb, text="All frames", variable=self.view_all, command=self.redraw)
+        self.view_all_check.pack(side="left", padx=(8, 0))
         self.paint_all = tk.BooleanVar(value=False)
-        self.paint_all_check = ttk.Checkbutton(bar, text="Paint on all frames", variable=self.paint_all)
-        self.paint_all_check.pack(side="left", padx=(6, 0))
-        self.frame_select_frame = ttk.Frame(right)
-        self.frame_select_frame.grid(row=2, column=0, columnspan=2, sticky="ew")
+        self.paint_all_check = ttk.Checkbutton(fb, text="Paint on all frames", variable=self.paint_all)
+        self.paint_all_check.pack(side="left", padx=(8, 0))
+        ttk.Separator(fb, orient="vertical").pack(side="left", fill="y", padx=10)
+        self.frame_select_frame = ttk.Frame(fb)
+        self.frame_select_frame.pack(side="left")
         self.preview = self._reg(tk.Canvas(right, highlightthickness=0), "canvas")
         self.preview.grid(row=3, column=0, sticky="nsew")
         pv_y = ttk.Scrollbar(right, orient="vertical", command=self.preview.yview)
@@ -893,14 +897,16 @@ class RevampApp(tk.Tk):
             child.destroy()
         self.frame_select_vars = {}
         if multi:
-            ttk.Label(self.frame_select_frame, text="Frames in the output:", style="Muted.TLabel").pack(side="left")
+            self.frame_bar.grid()
+            ttk.Label(self.frame_select_frame, text="In output:", style="Muted.TLabel").pack(side="left")
             for k in range(self.frame_count):
                 var = tk.BooleanVar(value=k in self.frames_selected)
                 self.frame_select_vars[k] = var
                 ttk.Checkbutton(self.frame_select_frame, text=str(k + 1), variable=var, command=lambda kk=k: self._toggle_frame_selected(kk)).pack(side="left", padx=(4, 0))
             ttk.Button(self.frame_select_frame, text="all", style="Tool.TButton", width=4, command=lambda: self._select_frames(set(range(self.frame_count)))).pack(side="left", padx=(8, 0))
             ttk.Button(self.frame_select_frame, text="1+2", style="Tool.TButton", width=4, command=lambda: self._select_frames({0, min(1, self.frame_count - 1)})).pack(side="left", padx=(3, 0))
-            ttk.Label(self.frame_select_frame, text="   unselected frames are hidden and left out of the saved sheet", style="Muted.TLabel").pack(side="left")
+        else:
+            self.frame_bar.grid_remove()
 
     def _toggle_frame_selected(self, k: int) -> None:
         if self.frame_select_vars[k].get():
